@@ -111,7 +111,10 @@ fn handle_element(
             page.properties.push(DwfProperty {
                 name: required(values, "name", document, "Property")?,
                 category: values.get("category").cloned(),
-                value: required(values, "value", document, "Property")?,
+                // AutoCAD emits empty document properties without a `value`
+                // attribute. Treat those as empty strings while keeping the
+                // property name mandatory.
+                value: values.get("value").cloned().unwrap_or_default(),
                 value_type: values.get("type").cloned(),
             });
         }
@@ -282,7 +285,10 @@ mod tests {
     #[test]
     fn parses_page_paper_properties_and_resources() {
         let xml = br#"<ePlot:Page xmlns:ePlot="DWF-ePlot:1.2" version="1.2" plotOrder="1" name="Sheet" color="128 128 128">
-          <ePlot:Properties><ePlot:Property name="Creator" value="test"/></ePlot:Properties>
+          <ePlot:Properties>
+            <ePlot:Property name="Creator" value="test"/>
+            <ePlot:Property name="Comments" category="AutoCAD Drawing"/>
+          </ePlot:Properties>
           <ePlot:Paper show="true" units="mm" width="297" height="210" clip="0 0 297 210" color="255 255 255"/>
           <ePlot:Resources><ePlot:GraphicResource role="2d streaming graphics" mime="application/x-w2d" href="sheet\\main.w2d" size="12" transform="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/></ePlot:Resources>
         </ePlot:Page>"#;
@@ -295,6 +301,8 @@ mod tests {
         .unwrap();
         assert_eq!(page.name, "Sheet");
         assert_eq!(page.paper.unwrap().units.as_deref(), Some("mm"));
+        assert_eq!(page.properties[1].name, "Comments");
+        assert_eq!(page.properties[1].value, "");
         assert_eq!(page.resources[0].normalized_href, "sheet/main.w2d");
         assert_eq!(page.resources[0].transform.as_ref().unwrap().len(), 16);
     }

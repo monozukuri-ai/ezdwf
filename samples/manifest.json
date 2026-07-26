@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-07-26",
+  "updated": "2026-07-27",
   "samples": [
     {
       "id": "autodesk-blocks-and-tables",
@@ -8,6 +8,7 @@
       "path": "samples/external/blocks_and_tables.dwf",
       "download_url": "https://download.autodesk.com/us/samplefiles/acad/blocks_and_tables.dwf",
       "source_page": "https://www.autodesk.com/support/technical/article/caas/tsarticles/ts/6XGQklp3ZcBFqljLPjrnQ9.html",
+      "retrieved_at": "2026-07-26",
       "sha256": "f74eb5c4a5d1cd6f0f3dd6e7e95e9475ff63680981d5a0ce390e8fd283ef771b",
       "size_bytes": 101370,
       "format": "DWF 6.00 ZIP package with W2D 6.00 resources",
@@ -33,6 +34,7 @@
       "path": "samples/external/ECMA-388.xps",
       "download_url": "https://ecma-international.org/wp-content/uploads/ECMA-388.xps",
       "source_page": "https://ecma-international.org/publications-and-standards/standards/ecma-388/",
+      "retrieved_at": "2026-07-26",
       "sha256": "579b553f499800713bdbbc3a82be6065db8611a050b585c011a29ebd8533c9ad",
       "size_bytes": 7303112,
       "format": "Microsoft XPS 1.0 OPC package using UTF-16LE fixed-payload XML",
@@ -47,6 +49,254 @@
         "status": "not-confirmed-for-the-complete-file",
         "policy": "local-download-only",
         "note": "ECMA publishes this file from the ECMA-388 standard page. It is an interoperability corpus for the shared OPC/XPS backend, not Autodesk-authored DWFx, and is therefore fetched locally rather than committed."
+      }
+    },
+    {
+      "id": "cadforum-xanadu-markup",
+      "description": "XANADU test drawing with Autodesk DWF Composer 2 markups",
+      "path": "samples/external/xanadu-test.dwf",
+      "download_url": "https://www.cadforum.cz/dl/Xanadu-test.dwf",
+      "source_page": "https://www.cadforum.cz/en/download.asp?fileID=528",
+      "retrieved_at": "2026-07-27",
+      "sha256": "a7032f74802c5794fd227a7d5c357265255de5369d0467f996a11872ed65135c",
+      "size_bytes": 17113,
+      "format": "DWF 6.00 ZIP package with ePlot and markup W2D resources",
+      "signature_ascii": "(DWF V06.00)",
+      "observed_structure": {
+        "zip_entries": 11,
+        "manifest_sections": 2,
+        "eplot_sheets": 1,
+        "entities": 29
+      },
+      "parser_expectation": {
+        "status": "supported",
+        "kind": "dwf_package",
+        "version": "06.00",
+        "sheet_count": 1,
+        "entity_count": 29,
+        "diagnostics": 0
+      },
+      "redistribution": {
+        "status": "not-confirmed-for-the-complete-file",
+        "policy": "local-download-only",
+        "note": "CAD Forum publishes this file as a downloadable sample. No license permitting redistribution with this project was found, so each developer fetches it from the publisher."
+      }
+    },
+    {
+      "id": "cadforum-design-review-drawing",
+      "description": "Drawing and markup sample authored with Autodesk Design Review 2009",
+      "path": "samples/external/mydrawing2009.dwfx",
+      "download_url": "https://www.cadforum.cz/dl/mydrawing2009.dwfx",
+      "source_page": "https://budweiser.cadstudio.cz/2009/01/hidden-free-drawing-software-by.html",
+      "retrieved_at": "2026-07-27",
+      "sha256": "635629a499e6b64f4cebd9b46bd8d74ba2249778089887905adc76378235653c",
+      "size_bytes": 102445,
+      "format": "Autodesk DWFx OPC/XPS package with Design Review markups and packaged fonts",
+      "signature_ascii": "PK",
+      "observed_structure": {
+        "zip_entries": 26,
+        "fixed_pages": 1,
+        "entities": 20,
+        "packaged_glyph_runs": 3,
+        "resolved_glyph_outlines": 3
+      },
+      "parser_expectation": {
+        "status": "supported",
+        "kind": "dwfx",
+        "version": null,
+        "sheet_count": 1,
+        "entity_count": 20,
+        "diagnostics": 0
+      },
+      "redistribution": {
+        "status": "not-confirmed-for-the-complete-file",
+        "policy": "local-download-only",
+        "note": "The author's article links this as a sample, but no license permitting redistribution with this project was found."
+      }
+    },
+    {
+      "id": "cadforum-empty-dwfx",
+      "description": "Empty A4 DWFx sheet intended as a Design Review drawing canvas",
+      "path": "samples/external/empty-sheet.dwfx",
+      "download_url": "https://www.cadforum.cz/catalog/file.asp?blk=4099",
+      "source_page": "https://www.cadforum.cz/catalog/block.asp?blk=4099",
+      "retrieved_at": "2026-07-27",
+      "sha256": "40f4de762d22085eae343dbbd2187e3fc9e8100adc5116e909e7519220483d37",
+      "size_bytes": 12710,
+      "format": "Autodesk DWFx OPC/XPS package with one empty A4 ePlot page",
+      "signature_ascii": "PK",
+      "observed_structure": {
+        "zip_entries": 20,
+        "fixed_pages": 1,
+        "entities": 1
+      },
+      "parser_expectation": {
+        "status": "supported",
+        "kind": "dwfx",
+        "version": null,
+        "sheet_count": 1,
+        "entity_count": 1,
+        "diagnostics": 0
+      },
+      "redistribution": {
+        "status": "source-terms-restrict-redistribution",
+        "policy": "local-download-only",
+        "terms_url": "https://www.cadforum.cz/catalog/cathelp.asp",
+        "note": "CAD Forum catalog terms prohibit copying or redistributing catalog content. The binary must not be committed or republished."
+      }
+    },
+    {
+      "id": "cadforum-empty-dwf",
+      "description": "Empty DWF package intended for inserting sheets in Design Review",
+      "path": "samples/external/empty.dwf",
+      "download_url": "https://www.cadforum.cz/catalog/file.asp?blk=912",
+      "source_page": "https://www.cadforum.cz/catalog/block.asp?blk=912",
+      "retrieved_at": "2026-07-27",
+      "sha256": "45aae411ac1117559aeeb7f41674fd9be76903ef0b4ef6a85b816856768caf95",
+      "size_bytes": 1461,
+      "format": "DWF 6.00 ZIP package containing only the global section",
+      "signature_ascii": "(DWF V06.00)",
+      "observed_structure": {
+        "zip_entries": 3,
+        "manifest_sections": 1,
+        "eplot_sheets": 0,
+        "entities": 0
+      },
+      "parser_expectation": {
+        "status": "supported",
+        "kind": "dwf_package",
+        "version": "06.00",
+        "sheet_count": 0,
+        "entity_count": 0,
+        "diagnostics": 0
+      },
+      "redistribution": {
+        "status": "source-terms-restrict-redistribution",
+        "policy": "local-download-only",
+        "terms_url": "https://www.cadforum.cz/catalog/cathelp.asp",
+        "note": "CAD Forum catalog terms prohibit copying or redistributing catalog content. The binary must not be committed or republished."
+      }
+    },
+    {
+      "id": "cadforum-czech-forest-map",
+      "description": "Czech Republic forest coverage map uploaded to the CAD Forum catalog",
+      "path": "samples/external/forest-map.dwf",
+      "download_url": "https://www.cadforum.cz/catalog/file.asp?blk=1974",
+      "source_page": "https://www.cadforum.cz/catalog/block.asp?blk=1974",
+      "retrieved_at": "2026-07-27",
+      "sha256": "0a1cb76e76f0c9bec401a5eacb1c43e7e3e11dd29ec04858ac612424814b4a0f",
+      "size_bytes": 298488,
+      "format": "DWF 6.00 ZIP package with one map ePlot sheet",
+      "signature_ascii": "(DWF V06.00)",
+      "observed_structure": {
+        "zip_entries": 7,
+        "eplot_sheets": 1,
+        "entities": 5788,
+        "entity_types": {
+          "POLYLINE": 5788
+        }
+      },
+      "parser_expectation": {
+        "status": "supported",
+        "kind": "dwf_package",
+        "version": "06.00",
+        "sheet_count": 1,
+        "entity_count": 5788,
+        "diagnostics": 0
+      },
+      "redistribution": {
+        "status": "source-terms-restrict-redistribution",
+        "policy": "local-download-only",
+        "terms_url": "https://www.cadforum.cz/catalog/cathelp.asp",
+        "note": "CAD Forum catalog terms prohibit copying or redistributing catalog content. The binary must not be committed or republished."
+      }
+    },
+    {
+      "id": "cadforum-layout-d-size",
+      "description": "D-size layout drawing uploaded to the CAD Forum catalog",
+      "path": "samples/external/layout-d-size.dwf",
+      "download_url": "https://www.cadforum.cz/catalog/file.asp?blk=9075",
+      "source_page": "https://www.cadforum.cz/catalog/block.asp?blk=9075",
+      "retrieved_at": "2026-07-27",
+      "sha256": "d06a67b494d9cef19cdb9c12e4c634019c19d638fb27b2871e454456b499062a",
+      "size_bytes": 167554,
+      "format": "DWF 6.00 ZIP package with one D-size ePlot sheet",
+      "signature_ascii": "(DWF V06.00)",
+      "observed_structure": {
+        "zip_entries": 6,
+        "eplot_sheets": 1,
+        "entities": 8618,
+        "diagnostics": 20
+      },
+      "parser_expectation": {
+        "status": "supported",
+        "kind": "dwf_package",
+        "version": "06.00",
+        "sheet_count": 1,
+        "entity_count": 8618,
+        "diagnostics": 20
+      },
+      "redistribution": {
+        "status": "source-terms-restrict-redistribution",
+        "policy": "local-download-only",
+        "terms_url": "https://www.cadforum.cz/catalog/cathelp.asp",
+        "note": "CAD Forum catalog terms prohibit copying or redistributing catalog content. The binary must not be committed or republished."
+      }
+    },
+    {
+      "id": "cadforum-legacy-guardrail-v0030",
+      "description": "Guardrail construction detail stored as a standalone legacy DWF stream",
+      "path": "samples/external/guardrail-detail-v0030.dwf",
+      "download_url": "https://www.cadforum.cz/catalog/file.asp?blk=3894",
+      "source_page": "https://www.cadforum.cz/catalog/block.asp?blk=3894",
+      "retrieved_at": "2026-07-27",
+      "sha256": "cceae961b6694b764ed73214ba2451592a7f56912aa41803ed16dd586c9a5920",
+      "size_bytes": 27769,
+      "format": "Standalone legacy DWF/W2D 00.30 stream",
+      "signature_ascii": "(DWF V00.30)",
+      "observed_structure": {
+        "archive": false,
+        "version": "00.30"
+      },
+      "parser_expectation": {
+        "status": "recognized-unsupported",
+        "kind": "legacy_dwf",
+        "version": "00.30",
+        "error_contains": "W2D version 00.30"
+      },
+      "redistribution": {
+        "status": "source-terms-restrict-redistribution",
+        "policy": "local-download-only",
+        "terms_url": "https://www.cadforum.cz/catalog/cathelp.asp",
+        "note": "CAD Forum catalog terms prohibit copying or redistributing catalog content. The binary must not be committed or republished."
+      }
+    },
+    {
+      "id": "cadforum-legacy-hvac-v0050",
+      "description": "HVAC drawing stored as a standalone legacy DWF stream",
+      "path": "samples/external/hvac-drawing-v0050.dwf",
+      "download_url": "https://www.cadforum.cz/catalog/file.asp?blk=4479",
+      "source_page": "https://www.cadforum.cz/catalog/block.asp?blk=4479",
+      "retrieved_at": "2026-07-27",
+      "sha256": "64f96d124b4f5a717dc37f245f677920f593f54129f9bb841fefe47943ba0ce3",
+      "size_bytes": 51009,
+      "format": "Standalone legacy DWF/W2D 00.50 stream",
+      "signature_ascii": "(DWF V00.50)",
+      "observed_structure": {
+        "archive": false,
+        "version": "00.50"
+      },
+      "parser_expectation": {
+        "status": "recognized-unsupported",
+        "kind": "legacy_dwf",
+        "version": "00.50",
+        "error_contains": "W2D version 00.50"
+      },
+      "redistribution": {
+        "status": "source-terms-restrict-redistribution",
+        "policy": "local-download-only",
+        "terms_url": "https://www.cadforum.cz/catalog/cathelp.asp",
+        "note": "CAD Forum catalog terms prohibit copying or redistributing catalog content. The binary must not be committed or republished."
       }
     }
   ]
