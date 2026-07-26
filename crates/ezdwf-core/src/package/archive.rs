@@ -6,6 +6,9 @@ use zip::ZipArchive;
 use super::path::normalize_entry_name;
 use crate::{ArchiveEntry, DwfError, ParseOptions};
 
+const CENTRAL_DIRECTORY_FILE_HEADER: &[u8; 4] = b"PK\x01\x02";
+const CENTRAL_DIRECTORY_FILE_HEADER_SIZE: usize = 46;
+
 pub(crate) struct PackageArchive<'a> {
     data: &'a [u8],
     prefix_len: usize,
@@ -28,9 +31,25 @@ impl<'a> PackageArchive<'a> {
             });
         }
         let mut archive = open_zip(data, prefix_len)?;
-        if archive.len() > options.max_archive_entries {
+        let unique_entry_count = archive.len();
+        let central_entry_count =
+            count_central_directory_entries(data, archive.central_directory_start())?;
+        if central_entry_count > unique_entry_count {
+            return Err(DwfError::DuplicateArchiveEntryNames {
+                actual: central_entry_count,
+                unique: unique_entry_count,
+            });
+        }
+        if central_entry_count != unique_entry_count {
+            return Err(DwfError::InvalidArchive {
+                context: format!(
+                    "central directory contains {central_entry_count} file headers but the ZIP reader exposed {unique_entry_count} entries"
+                ),
+            });
+        }
+        if central_entry_count > options.max_archive_entries {
             return Err(DwfError::ArchiveEntryLimitExceeded {
-                actual: archive.len(),
+                actual: central_entry_count,
                 limit: options.max_archive_entries,
             });
         }
@@ -200,8 +219,88 @@ fn open_zip(data: &[u8], prefix_len: usize) -> Result<ZipArchive<Cursor<&[u8]>>,
     ZipArchive::new(Cursor::new(data)).map_err(zip_error)
 }
 
+fn count_central_directory_entries(data: &[u8], start: u64) -> Result<usize, DwfError> {
+    let mut offset = usize::try_from(start).map_err(|_| DwfError::InvalidArchive {
+        context: format!("central directory offset {start} does not fit in memory"),
+    })?;
+    if offset > data.len() {
+        return Err(DwfError::InvalidArchive {
+            context: format!(
+                "central directory starts at byte {offset}, beyond input size {}",
+                data.len()
+            ),
+        });
+    }
+
+    let mut count = 0usize;
+    while data.get(offset..offset.saturating_add(4)) == Some(CENTRAL_DIRECTORY_FILE_HEADER) {
+        let header_end = offset
+            .checked_add(CENTRAL_DIRECTORY_FILE_HEADER_SIZE)
+            .ok_or_else(|| invalid_central_directory(offset))?;
+        let header = data
+            .get(offset..header_end)
+            .ok_or_else(|| invalid_central_directory(offset))?;
+        let name_length = usize::from(u16::from_le_bytes([header[28], header[29]]));
+        let extra_length = usize::from(u16::from_le_bytes([header[30], header[31]]));
+        let comment_length = usize::from(u16::from_le_bytes([header[32], header[33]]));
+        let record_length = CENTRAL_DIRECTORY_FILE_HEADER_SIZE
+            .checked_add(name_length)
+            .and_then(|value| value.checked_add(extra_length))
+            .and_then(|value| value.checked_add(comment_length))
+            .ok_or_else(|| invalid_central_directory(offset))?;
+        offset = offset
+            .checked_add(record_length)
+            .filter(|end| *end <= data.len())
+            .ok_or_else(|| invalid_central_directory(offset))?;
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| invalid_central_directory(offset))?;
+    }
+    Ok(count)
+}
+
+fn invalid_central_directory(offset: usize) -> DwfError {
+    DwfError::InvalidArchive {
+        context: format!("truncated or overflowing central directory entry at byte {offset}"),
+    }
+}
+
 fn zip_error(error: zip::result::ZipError) -> DwfError {
     DwfError::InvalidArchive {
         context: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn central_directory_record(name: &[u8], extra: &[u8], comment: &[u8]) -> Vec<u8> {
+        let mut record = vec![0; CENTRAL_DIRECTORY_FILE_HEADER_SIZE];
+        record[..4].copy_from_slice(CENTRAL_DIRECTORY_FILE_HEADER);
+        record[28..30].copy_from_slice(&(name.len() as u16).to_le_bytes());
+        record[30..32].copy_from_slice(&(extra.len() as u16).to_le_bytes());
+        record[32..34].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+        record.extend_from_slice(name);
+        record.extend_from_slice(extra);
+        record.extend_from_slice(comment);
+        record
+    }
+
+    #[test]
+    fn counts_variable_length_central_directory_records() {
+        let mut data = b"prefix".to_vec();
+        let start = data.len() as u64;
+        data.extend(central_directory_record(b"a", b"extra", b"comment"));
+        data.extend(central_directory_record(b"longer/name", b"", b""));
+        data.extend_from_slice(b"PK\x05\x06");
+        assert_eq!(count_central_directory_entries(&data, start).unwrap(), 2);
+    }
+
+    #[test]
+    fn rejects_truncated_central_directory_record() {
+        let error = count_central_directory_entries(CENTRAL_DIRECTORY_FILE_HEADER, 0)
+            .expect_err("truncated header");
+        assert!(matches!(error, DwfError::InvalidArchive { .. }));
     }
 }

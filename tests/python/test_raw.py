@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from io import BytesIO
-from zipfile import ZIP_STORED, ZipFile
+from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 from conftest import DEFAULT_W2D, DWF_HEADER, make_dwf, make_dwfx, zip_bytes
@@ -180,8 +180,25 @@ def test_rejects_path_traversal_and_normalized_duplicates() -> None:
     output.write(DWF_HEADER)
     with ZipFile(output, "a", compression=ZIP_STORED) as archive:
         archive.writestr("manifest.xml", b"x")
-        archive.writestr("sheet\\main.w2d", b"x")
+        backslash_name = ZipInfo("sheet/main.w2d")
+        # ZipInfo.__init__ converts the host separator to '/' on Windows.
+        # Assigning afterwards preserves the historical backslash in ZIP bytes.
+        backslash_name.filename = "sheet\\main.w2d"
+        backslash_name.compress_type = ZIP_STORED
+        archive.writestr(backslash_name, b"x")
         archive.writestr("sheet/main.w2d", b"x")
+    with pytest.raises(ezdwf.InvalidDwfError, match="normalize to the same path"):
+        ezdwf.inspect_package(output.getvalue())
+
+
+def test_rejects_exact_duplicate_zip_names() -> None:
+    output = BytesIO()
+    output.write(DWF_HEADER)
+    with ZipFile(output, "a", compression=ZIP_STORED) as archive:
+        archive.writestr("manifest.xml", b"x")
+        archive.writestr("sheet/main.w2d", b"first")
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            archive.writestr("sheet/main.w2d", b"second")
     with pytest.raises(ezdwf.InvalidDwfError, match="normalize to the same path"):
         ezdwf.inspect_package(output.getvalue())
 

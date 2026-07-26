@@ -12,6 +12,7 @@ rust-version = "1.83"
 authors = ["neka-nat <nekanat.stock@gmail.com>"]
 description = "Native DWF 2D package inspector and parser core"
 repository = "https://github.com/monozukuri-ai/ezdwf"
+license = "MIT"
 
 [workspace.dependencies]
 indexmap = "=2.13.0"

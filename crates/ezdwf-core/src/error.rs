@@ -59,6 +59,11 @@ pub enum DwfError {
         second: String,
     },
 
+    #[error(
+        "ZIP central directory contains {actual} entries but only {unique} unique names; duplicate entry names normalize to the same path"
+    )]
+    DuplicateArchiveEntryNames { actual: usize, unique: usize },
+
     #[error("required ZIP entry {name:?} is missing")]
     MissingEntry { name: String },
 
