@@ -91,6 +91,11 @@ jobs:
           assert len(wheels) == 1, wheels
           wheel = wheels[0]
           assert "cp310-abi3" in wheel.name, wheel.name
+          expected_extension = (
+              "ezdwf/_core.pyd"
+              if "-win_" in wheel.name
+              else "ezdwf/_core.abi3.so"
+          )
           with ZipFile(wheel) as archive:
               names = archive.namelist()
               assert "ezdwf/py.typed" in names
@@ -98,7 +103,7 @@ jobs:
               assert "ezdwf/document.py" in names
               assert "ezdwf/raw.py" in names
               assert "ezdwf/svg.py" in names
-              assert any(name.startswith("ezdwf/_core.abi3") for name in names)
+              assert expected_extension in names, (wheel.name, expected_extension)
               assert not any(name.lower().endswith(".dwf") for name in names)
               assert not any(name.lower().endswith(".dwfx") for name in names)
               assert not any(name.lower().endswith(".svg") for name in names)

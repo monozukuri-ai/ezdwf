@@ -205,13 +205,20 @@ jobs:
           for wheel in wheels:
               if "-cp310-abi3-" not in wheel.name:
                   raise SystemExit(f"Wheel does not use the cp310 ABI3 tag: {wheel.name}")
+              expected_extension = (
+                  "ezdwf/_core.pyd"
+                  if "-win_" in wheel.name
+                  else "ezdwf/_core.abi3.so"
+              )
               with ZipFile(wheel) as archive:
                   names = set(archive.namelist())
                   missing = required - names
                   if missing:
                       raise SystemExit(f"{wheel.name} is missing {sorted(missing)}")
-                  if not any(name.startswith("ezdwf/_core.abi3") for name in names):
-                      raise SystemExit(f"{wheel.name} is missing the ABI3 extension")
+                  if expected_extension not in names:
+                      raise SystemExit(
+                          f"{wheel.name} is missing ABI3 extension {expected_extension}"
+                      )
                   if any(name.lower().endswith((".dwf", ".dwfx")) for name in names):
                       raise SystemExit(f"{wheel.name} unexpectedly contains sample drawings")
 

@@ -21,7 +21,7 @@ SAMPLES = [
 def test_external_sample_parser_expectation(sample: dict[str, object]) -> None:
     path = REPOSITORY_ROOT / str(sample["path"])
     if not path.is_file():
-        pytest.skip(f'external sample was not downloaded: {sample["id"]}')
+        pytest.skip(f"external sample was not downloaded: {sample['id']}")
 
     data = path.read_bytes()
     assert len(data) == sample["size_bytes"]
