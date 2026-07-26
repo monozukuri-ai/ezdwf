@@ -1,145 +1,100 @@
 # ezdwf
 
-`ezdwf` is an experimental, read-only 2D DWF parser with a pure Rust core and
-an ergonomic Python API. Phase 0 through Phase 7 are implemented: format
-detection, bounded DWF 6 package inspection, manifest/ePlot metadata, a
-stateful W2D geometry decoder, a DWFx OPC/XPS backend, and a
-normalized/queryable paper-space model.
+`ezdwf` is an experimental, read-only Python library for parsing 2D Autodesk
+DWF and DWFx files. Its parser is written in Rust and exposes drawings through
+an ezdxf-style Python API.
 
-The parser does not use DXF as an intermediate representation. Unsupported or
-ambiguous source semantics are reported explicitly instead of being silently
-invented or discarded.
+The library reads source formats directly without converting them to DXF. It
+provides both a normalized paper-space model for application code and access to
+the underlying DWF, W2D, OPC, and XPS records when lower-level data is needed.
 
-## Current support
+## Installation
 
-- Detect legacy DWF, DWF 6 packages, and DWFx by content signature.
-- Traverse DWFx content types and internal OPC relationships without fetching
-  external targets.
-- Decode ordered XPS `FixedDocumentSequence` / `FixedDocument` / `FixedPage`
-  parts, including Canvas transforms, Path geometry, Glyphs, solid brushes,
-  image/linear-gradient/radial-gradient brushes, opacity masks, scoped inline
-  resources, and package-local remote resource dictionaries.
-- Parse abbreviated and explicit XPS line, cubic/quadratic Bezier, and
-  elliptical-arc path segments.
-- Preserve nested Canvas/Path/Glyphs clip chains and segment-level
-  `IsStroked`/`IsSmoothJoin` plus figure-level `IsFilled` semantics.
-- Preserve nested opacity-mask chains, apply `PathGeometry.Transform` without
-  scaling stroke thickness, and normalize brush transforms into paper space.
-- Execute inline and static-resource `VisualBrush` trees and preserve Canvas as
-  isolated compositing groups, so Canvas opacity, clip, and mask apply once to
-  the combined child result.
-- Read PNG/JPEG/TIFF pixel density for DIP-accurate `ImageBrush.Viewbox` crops.
-- Deobfuscate package-local ODTTF resources internally and materialize
-  positioned `Glyphs.Indices` runs as OpenType outlines for normalized output.
-- Resolve remote `ResourceDictionary` parts with inner-scope shadowing,
-  declaration-base image URIs, and required-resource relationship diagnostics.
-- Decode bounded UTF-8 and UTF-16LE/BE package XML, including real-world XPS
-  fixed payloads.
-- Safely inspect DWF 6 ZIP entries without extracting them to disk.
-- Parse DWF 6 manifests and ePlot 1.2 page/resource descriptors.
-- Decode W2D 6 line, polyline/polygon, circle/arc, ellipse, PolyBezier,
-  polytriangle, contour, Gouraud, texture, image, and text records in ASCII
-  and common binary forms.
-- Expand W2D zlib streams (including the standard preset dictionary) and
-  legacy LZ streams with size/depth limits and compressed source mapping.
-- Preserve ColorMap, embedded-font bytes, and deprecated 00.55 BlockRef data.
-- Read legacy WHIP/DWF 00.42 and 00.55 through the same high-level API.
-- Expose markup separately as `Sheet.markup_entities` and optionally render it.
-- Snapshot layer, RGBA/indexed color, line/fill, font, visibility, viewport,
-  units, package resource transform, raw opcode, and byte range per entity.
-- Apply the ePlot resource transform in Rust and expose exact paper-space
-  points/curve axes while retaining links to every raw W2D entity.
-- Query entities by type, layer, indexed color, visibility, and viewport.
-- Produce deterministic dependency-free SVG reference renders.
-- Enforce archive, XML, W2D record/point/string/nesting/decompression, and XPS
-  visual/path-segment limits.
+Python 3.10 or later is required. From a source checkout, run:
 
-DWFx linear/radial gradients, VisualBrush trees, image-brush
-viewport/transform/tile/DPI-viewbox placement, Canvas group compositing, and
-opacity masks have an SVG preview. DWFx Glyphs preserve font URI, Indices, and
-style metadata; package-local OpenType/ODTTF fonts are converted to positioned
-outlines, with an explicit Unicode text fallback and diagnostic when a font
-cannot be decoded. Color-profile brushes, JPEG XR intrinsic DPI, `ContextColor`,
-and scRGB-specific interpolation remain preview boundaries. Group3/Group4 W2D
-raster payloads are retained but use an SVG placeholder because no fax codec is
-bundled; PNG/JPEG and raw bitonal/RGB/RGBA/indexed images can be rendered. W2D
-Embedded Font records remain retained bytes and are not converted to glyph
-outlines. Unknown
-length-delimited records are skipped with diagnostics, and unknown single-byte
-opcodes fail closed.
+```console
+python -m pip install .
+```
 
-## Python API
+Building from source also requires a Rust toolchain.
+
+## Quick start
 
 ```python
 import ezdwf
 
 drawing = ezdwf.read("drawing.dwf")
-sheet = drawing.sheet(0)
+sheet = drawing.modelspace()
+
+print(drawing.stats())
 
 for entity in sheet.query('LINE POLYLINE[layer=="Walls", visible==true]'):
-    print(entity.dxftype(), entity.layer, entity.points, entity.source.offset)
+    print(entity.dxftype(), entity.layer, entity.points)
 
-sheet.save_svg("sheet.svg", curve_segments=96, include_markup=True)
+sheet.save_svg("drawing.svg")
 ```
 
-`Drawing.raw` exposes a `PackageInfo`, `DwfxPackageInfo`, or legacy `W2dStream`.
-`Entity.raw` points to the exact `W2dEntity` or `XpsEntity` used to build the
-normalized entity. An extracted W2D resource can also be decoded directly with
-`ezdwf.decode_w2d(...)`; DWFx packages can be inspected without normalization
-with `ezdwf.inspect_dwfx(...)`.
+Multi-sheet drawings can be accessed by index, page name, or title:
 
-`ezdwf.inspect_dwfx()` defaults to structure-only inspection and therefore does
-not expand packaged fonts. Pass `resolve_glyph_outlines=True` when raw outline
-geometry is required. `ezdwf.read()` enables outline resolution because the
-normalized model and SVG renderer consume that geometry.
+```python
+first_sheet = drawing.sheet(0)
+named_sheet = drawing.sheet("Floor Plan")
+```
 
-Coordinates in high-level `Entity` values are ePlot paper coordinates and use
-the sheet's declared paper units. DWFx sheets use DIP (1/96 inch), converted
-from XPS's top-left/Y-down space to the common bottom-left/Y-up convention.
-Coordinates in `W2dEntity` and `XpsEntity` preserve their respective source
-representations. The W2D units matrix and ePlot resource transform remain
-available separately. See
-[`docs/object-model.ja.md`](docs/object-model.ja.md) for the coordinate and
-rendering contract, [`docs/phase5-dwfx.ja.md`](docs/phase5-dwfx.ja.md) for the
-initial DWFx backend,
-[`docs/phase6-dwfx-fidelity.ja.md`](docs/phase6-dwfx-fidelity.ja.md) for the
-clip/interoperability work, and
-[`docs/phase7-xps-resources-brushes.ja.md`](docs/phase7-xps-resources-brushes.ja.md)
-for the current resource and brush fidelity boundary.
-
-## CLI
+## Command line
 
 ```console
 ezdwf inspect drawing.dwf
 ezdwf inspect drawing.dwf --json
-ezdwf inspect drawing.dwf --entries
-ezdwf render drawing.dwf sheet.svg --sheet 0
-ezdwf render drawing.dwf sheet.svg --include-markup
+ezdwf render drawing.dwf drawing.svg --sheet 0
 ```
 
-## Development
+Run `ezdwf --help` or `ezdwf <command> --help` for all options.
 
-```console
-uv sync --extra dev
-uv run maturin develop --release
-uv run pytest -q
-uv run ruff format --check src tests
-uv run ruff check src tests
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --locked
-cargo check --manifest-path fuzz/Cargo.toml --bins --locked
+## Supported input
+
+- Legacy 2D DWF/WHIP streams
+- DWF 6 packages containing ePlot/W2D resources
+- DWFx packages containing OPC/OpenXPS fixed pages
+
+Common 2D geometry, layers, colors, line and fill styles, text, raster images,
+clips, opacity masks, gradients, Canvas groups, and VisualBrush resources are
+represented in the normalized model. DWFx package fonts can be decoded into
+positioned glyph outlines. Drawings can be queried by entity type and style and
+rendered to deterministic SVG without additional runtime dependencies.
+
+For package inspection without normalization, use the lower-level API:
+
+```python
+package = ezdwf.inspect_package("drawing.dwf")
+dwfx = ezdwf.inspect_dwfx("drawing.dwfx")
+
+# Glyph outlines are opt-in for structure-only DWFx inspection.
+dwfx_with_outlines = ezdwf.inspect_dwfx(
+    "drawing.dwfx",
+    resolve_glyph_outlines=True,
+)
 ```
 
-Fetch and verify the external Autodesk DWF and ECMA XPS integration samples,
-then inspect them:
+## Coordinates
 
-```console
-python scripts/fetch_samples.py
-uv run ezdwf inspect samples/external/blocks_and_tables.dwf --json
-uv run ezdwf inspect samples/external/ECMA-388.xps --json
-```
+High-level entities use the sheet's paper units in a bottom-left, Y-up
+coordinate system. DWFx pages use device-independent pixels (DIP), where
+96 DIP equals one inch. Raw objects retain their source coordinate systems and
+transforms.
 
-Third-party reference files under `samples/external/` are downloaded locally
-and are not included in Git or Python distributions. See
-[`samples/README.md`](samples/README.md) for provenance and verification.
+See [the object model documentation](docs/object-model.ja.md) for details.
+
+## Limitations
+
+- The API is read-only and is still pre-alpha.
+- Support is focused on 2D ePlot content; 3D DWF content is outside the current
+  scope.
+- SVG output is a reference preview. Some color-profile brushes, JPEG XR image
+  details, and format-specific embedded fonts cannot yet be rendered exactly.
+- Unsupported or ambiguous source semantics are reported through diagnostics
+  instead of being silently approximated.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

@@ -3,6 +3,8 @@ name = "ezdwf"
 version = "0.0.1"
 description = "Native DWF 2D package inspector and parser for Python powered by Rust"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "neka-nat", email = "nekanat.stock@gmail.com" },
 ]
@@ -12,6 +14,7 @@ keywords = ["dwf", "cad", "autodesk", "parser", "rust"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
