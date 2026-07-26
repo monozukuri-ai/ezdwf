@@ -16,6 +16,7 @@ from . import (
     inspect_dwfx,
     inspect_package,
     read,
+    save_plot,
     save_svg,
 )
 
@@ -77,6 +78,51 @@ def _build_parser() -> argparse.ArgumentParser:
     render.add_argument(
         "--hide-text", action="store_true", help="Do not emit SVG text elements"
     )
+    plot = subcommands.add_parser("plot", help="Render an ePlot sheet with Matplotlib")
+    plot.add_argument("input", help="Path to a DWF or DWFx file")
+    plot.add_argument("output", help="Output image path (for example PNG or PDF)")
+    plot.add_argument(
+        "--sheet",
+        default="0",
+        help="Zero-based sheet index or exact page/title (default: 0)",
+    )
+    plot.add_argument(
+        "--dpi", type=int, default=150, help="Raster output DPI (default: 150)"
+    )
+    plot.add_argument(
+        "--margin",
+        type=float,
+        default=0.0,
+        help="Extra margin in paper units (default: 0)",
+    )
+    plot.add_argument(
+        "--curve-segments",
+        type=int,
+        default=96,
+        help="Segments per full ellipse preview (default: 96)",
+    )
+    plot.add_argument(
+        "--monochrome", action="store_true", help="Render using one contrast color"
+    )
+    plot.add_argument(
+        "--include-invisible",
+        action="store_true",
+        help="Include entities whose W2D visibility state is off",
+    )
+    plot.add_argument(
+        "--include-markup",
+        action="store_true",
+        help="Include entities from markup-role W2D resources",
+    )
+    plot.add_argument(
+        "--hide-text", action="store_true", help="Do not render text entities"
+    )
+    plot.add_argument(
+        "--show-axes", action="store_true", help="Show coordinate axes and paper units"
+    )
+    plot.add_argument(
+        "--transparent", action="store_true", help="Save with a transparent background"
+    )
     return parser
 
 
@@ -103,6 +149,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                 show_text=not args.hide_text,
             )
         except (
+            OSError,
+            DwfError,
+            IndexError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as error:
+            print(f"ezdwf: {error}", file=sys.stderr)
+            return 1
+        print(f"wrote: {args.output}")
+        return 0
+
+    if args.command == "plot":
+        sheet_key = int(args.sheet) if args.sheet.isdecimal() else args.sheet
+        try:
+            drawing = read(args.input)
+            save_plot(
+                drawing,
+                args.output,
+                sheet=sheet_key,
+                dpi=args.dpi,
+                margin=args.margin,
+                curve_segments=args.curve_segments,
+                monochrome=args.monochrome,
+                include_invisible=args.include_invisible,
+                include_markup=args.include_markup,
+                show_text=not args.hide_text,
+                show_axes=args.show_axes,
+                transparent=args.transparent,
+            )
+        except (
+            ImportError,
             OSError,
             DwfError,
             IndexError,

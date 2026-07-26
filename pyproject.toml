@@ -27,8 +27,12 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+plot = [
+    "matplotlib>=3.8",
+]
 dev = [
     "maturin>=1.13,<2.0",
+    "matplotlib>=3.8",
     "pytest>=8.0",
     "ruff>=0.16,<0.17",
 ]

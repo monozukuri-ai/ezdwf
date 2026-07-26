@@ -32,6 +32,7 @@ from .document import (
     read,
     readfile,
 )
+from .matplotlib import plot, save_plot
 from .raw import (
     DEFAULT_LIMITS,
     ArchiveEntry,
@@ -181,8 +182,10 @@ __all__ = [
     "inspect_dwfx",
     "inspect_package",
     "main",
+    "plot",
     "read",
     "readfile",
     "render_svg",
+    "save_plot",
     "save_svg",
 ]

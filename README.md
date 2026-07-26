@@ -18,6 +18,12 @@ python -m pip install .
 
 Building from source also requires a Rust toolchain.
 
+Install the optional Matplotlib renderer with:
+
+```console
+python -m pip install "ezdwf[plot]"
+```
+
 ## Quick start
 
 ```python
@@ -34,6 +40,16 @@ for entity in sheet.query('LINE POLYLINE[layer=="Walls", visible==true]'):
 sheet.save_svg("drawing.svg")
 ```
 
+Matplotlib can be used for interactive inspection or raster/PDF output:
+
+```python
+figure, axes = ezdwf.plot(drawing, include_markup=True)
+figure.savefig("drawing.png", dpi=150, bbox_inches="tight")
+
+# Or render and close the figure in one call.
+ezdwf.save_plot(drawing, "drawing.png", dpi=150, include_markup=True)
+```
+
 Multi-sheet drawings can be accessed by index, page name, or title:
 
 ```python
@@ -47,6 +63,7 @@ named_sheet = drawing.sheet("Floor Plan")
 ezdwf inspect drawing.dwf
 ezdwf inspect drawing.dwf --json
 ezdwf render drawing.dwf drawing.svg --sheet 0
+ezdwf plot drawing.dwf drawing.png --sheet 0 --dpi 150
 ```
 
 Run `ezdwf --help` or `ezdwf <command> --help` for all options.
@@ -92,6 +109,8 @@ See [the object model documentation](docs/object-model.ja.md) for details.
   scope.
 - SVG output is a reference preview. Some color-profile brushes, JPEG XR image
   details, and format-specific embedded fonts cannot yet be rendered exactly.
+- Matplotlib output uses representative colors for complex XPS gradient,
+  ImageBrush, and VisualBrush paints and applies the first path in a clip chain.
 - Unsupported or ambiguous source semantics are reported through diagnostics
   instead of being silently approximated.
 

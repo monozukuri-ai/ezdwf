@@ -64,7 +64,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: python -m pip install "pytest>=8" .
+      - run: python -m pip install "pytest>=8" ".[plot]"
       - run: pytest -q
       - run: python -m ezdwf --version
 
@@ -101,6 +101,7 @@ jobs:
               assert "ezdwf/py.typed" in names
               assert "ezdwf/_core.pyi" in names
               assert "ezdwf/document.py" in names
+              assert "ezdwf/matplotlib.py" in names
               assert "ezdwf/raw.py" in names
               assert "ezdwf/svg.py" in names
               assert expected_extension in names, (wheel.name, expected_extension)

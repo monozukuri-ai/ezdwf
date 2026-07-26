@@ -71,7 +71,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Install package and test dependencies
-        run: python -m pip install "pytest>=8" .
+        run: python -m pip install "pytest>=8" ".[plot]"
 
       - name: Test Python package
         run: pytest -q
@@ -198,6 +198,7 @@ jobs:
               "ezdwf/__init__.py",
               "ezdwf/_core.pyi",
               "ezdwf/document.py",
+              "ezdwf/matplotlib.py",
               "ezdwf/py.typed",
               "ezdwf/raw.py",
               "ezdwf/svg.py",
@@ -304,7 +305,9 @@ jobs:
               "inspect_dwfx",
               "inspect_package",
               "read",
+              "plot",
               "render_svg",
+              "save_plot",
           ):
               assert hasattr(ezdwf, name), name
 
@@ -316,6 +319,7 @@ jobs:
           for relative_path in (
               "_core.pyi",
               "document.py",
+              "matplotlib.py",
               "py.typed",
               "raw.py",
               "svg.py",

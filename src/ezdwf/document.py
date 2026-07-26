@@ -642,6 +642,20 @@ class Sheet:
 
         return save_svg(self, output, **options)
 
+    def plot(self, **options: object) -> tuple[Any, Any]:
+        """Render this sheet on Matplotlib axes and return ``(figure, axes)``."""
+
+        from .matplotlib import plot
+
+        return plot(self, **options)
+
+    def save_plot(self, output: str | os.PathLike[str], **options: object) -> Path:
+        """Render this sheet to a Matplotlib-supported image format."""
+
+        from .matplotlib import save_plot
+
+        return save_plot(self, output, **options)
+
 
 @dataclass(frozen=True, slots=True)
 class Drawing:
@@ -709,6 +723,20 @@ class Drawing:
             entity for sheet in self.sheets for entity in sheet.entities
         )
         return {"sheet_count": len(self.sheets), **entities.stats()}
+
+    def plot(self, **options: object) -> tuple[Any, Any]:
+        """Render one drawing sheet and return Matplotlib ``(figure, axes)``."""
+
+        from .matplotlib import plot
+
+        return plot(self, **options)
+
+    def save_plot(self, output: str | os.PathLike[str], **options: object) -> Path:
+        """Render one drawing sheet to a Matplotlib-supported image format."""
+
+        from .matplotlib import save_plot
+
+        return save_plot(self, output, **options)
 
 
 def read(
