@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo check --manifest-path fuzz/Cargo.toml --bins --locked
+
+  msrv:
+    name: Rust 1.83 MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.83
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --locked
+
+  lockfile:
+    name: Python lockfile and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv lock --check
+      - run: uvx ruff==0.16.0 format --check src tests
+      - run: uvx ruff==0.16.0 check src tests
+
+  python:
+    name: Python ${{ matrix.python }} on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.10"
+          - os: ubuntu-latest
+            python: "3.14"
+          - os: macos-latest
+            python: "3.10"
+          - os: windows-latest
+            python: "3.10"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python -m pip install "maturin>=1.13,<2" "pytest>=8"
+      - run: maturin develop --release
+      - run: pytest -q
+      - run: python -m ezdwf --version
+
+  wheel:
+    name: abi3 wheel contents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python -m pip install "maturin>=1.13,<2"
+      - run: maturin build --release --locked --out dist
+      - name: Verify wheel tags, metadata, and payload
+        shell: python
+        run: |
+          from email.parser import BytesParser
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheels = list(Path("dist").glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          wheel = wheels[0]
+          assert "cp310-abi3" in wheel.name, wheel.name
+          with ZipFile(wheel) as archive:
+              names = archive.namelist()
+              assert "ezdwf/py.typed" in names
+              assert "ezdwf/_core.pyi" in names
+              assert "ezdwf/document.py" in names
+              assert "ezdwf/raw.py" in names
+              assert "ezdwf/svg.py" in names
+              assert any(name.startswith("ezdwf/_core.abi3") for name in names)
+              assert not any(name.lower().endswith(".dwf") for name in names)
+              assert not any(name.lower().endswith(".dwfx") for name in names)
+              assert not any(name.lower().endswith(".svg") for name in names)
+              metadata_name = next(name for name in names if name.endswith(".dist-info/METADATA"))
+              metadata = BytesParser().parsebytes(archive.read(metadata_name))
+              assert metadata["Requires-Python"] == ">=3.10"

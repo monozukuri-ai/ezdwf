@@ -1,0 +1,29 @@
+[package]
+name = "ezdwf-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+ezdwf-core = { path = "../crates/ezdwf-core" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "decode_w2d"
+path = "fuzz_targets/decode_w2d.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "inspect_dwfx"
+path = "fuzz_targets/inspect_dwfx.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = []

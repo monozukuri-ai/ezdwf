@@ -1,0 +1,53 @@
+[project]
+name = "ezdwf"
+version = "0.0.1"
+description = "Native DWF 2D package inspector and parser for Python powered by Rust"
+readme = "README.md"
+authors = [
+    { name = "neka-nat", email = "nekanat.stock@gmail.com" },
+]
+requires-python = ">=3.10"
+dependencies = []
+keywords = ["dwf", "cad", "autodesk", "parser", "rust"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Libraries",
+]
+
+[project.optional-dependencies]
+dev = [
+    "maturin>=1.13,<2.0",
+    "pytest>=8.0",
+    "ruff>=0.16,<0.17",
+]
+
+[project.urls]
+Homepage = "https://github.com/monozukuri-ai/ezdwf"
+Repository = "https://github.com/monozukuri-ai/ezdwf"
+Issues = "https://github.com/monozukuri-ai/ezdwf/issues"
+
+[project.scripts]
+ezdwf = "ezdwf:main"
+
+[tool.maturin]
+manifest-path = "crates/ezdwf-python/Cargo.toml"
+module-name = "ezdwf._core"
+python-packages = ["ezdwf"]
+python-source = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+addopts = "-ra"
+
+[build-system]
+requires = ["maturin>=1.13,<2.0"]
+build-backend = "maturin"

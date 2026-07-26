@@ -1,0 +1,16 @@
+# Third-party reference files are downloaded locally.  Their redistribution
+# terms are tracked in samples/manifest.json and must be reviewed separately.
+/samples/external/
+
+# Rust and Python build products.
+/target/
+/fuzz/target/
+/fuzz/artifacts/
+/dist/
+/.venv/
+/.pytest_cache/
+**/__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.dylib

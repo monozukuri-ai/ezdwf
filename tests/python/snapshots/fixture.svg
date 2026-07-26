@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 297 210" width="297" height="210" preserveAspectRatio="xMidYMid meet" data-coordinate-space="eplot-paper" data-sheet="Fixture Sheet" data-units="mm">
+  <rect id="paper" x="0" y="0" width="297" height="210" fill="#ffffff"/>
+  <g id="entities">
+    <polygon id="e0" data-type="POLYGON" data-layer="walls" data-source-offset="120" stroke="#0c2238" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" fill="#0c2238" points="2,207 12,207 12,197"/>
+    <line id="e1" data-type="LINE" data-layer="walls" data-source-offset="141" stroke="#0c2238" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" fill="none" x1="2" y1="207" x2="7" y2="202"/>
+    <text id="e2" data-type="TEXT" data-layer="walls" data-source-offset="151" fill="#0c2238" font-family="sans-serif" font-size="3.564" xml:space="preserve" x="4" y="204">fixture</text>
+  </g>
+</svg>

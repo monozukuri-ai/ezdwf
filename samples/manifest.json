@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "updated": "2026-07-26",
+  "samples": [
+    {
+      "id": "autodesk-blocks-and-tables",
+      "description": "Autodesk Blocks and Tables sample, containing Imperial and Metric ePlot sheets",
+      "path": "samples/external/blocks_and_tables.dwf",
+      "download_url": "https://download.autodesk.com/us/samplefiles/acad/blocks_and_tables.dwf",
+      "source_page": "https://www.autodesk.com/support/technical/article/caas/tsarticles/ts/6XGQklp3ZcBFqljLPjrnQ9.html",
+      "sha256": "f74eb5c4a5d1cd6f0f3dd6e7e95e9475ff63680981d5a0ce390e8fd283ef771b",
+      "size_bytes": 101370,
+      "format": "DWF 6.00 ZIP package with W2D 6.00 resources",
+      "signature_ascii": "(DWF V06.00)",
+      "observed_structure": {
+        "zip_entries": 18,
+        "manifest_sections": 3,
+        "eplot_sheets": 2,
+        "sheet_names": [
+          "Blocks and Tables - Imperial",
+          "Blocks and Tables - Metric"
+        ]
+      },
+      "redistribution": {
+        "status": "not-confirmed-for-the-complete-file",
+        "policy": "local-download-only",
+        "note": "The Autodesk download page does not state redistribution terms. A Safe Software article attributes the Imperial dataset to CC BY-NC-SA 3.0, but that statement was not sufficient to establish the license of this complete two-sheet DWF file."
+      }
+    },
+    {
+      "id": "ecma-388-openxps",
+      "description": "ECMA-388 OpenXPS specification published as an XPS document",
+      "path": "samples/external/ECMA-388.xps",
+      "download_url": "https://ecma-international.org/wp-content/uploads/ECMA-388.xps",
+      "source_page": "https://ecma-international.org/publications-and-standards/standards/ecma-388/",
+      "sha256": "579b553f499800713bdbbc3a82be6065db8611a050b585c011a29ebd8533c9ad",
+      "size_bytes": 7303112,
+      "format": "Microsoft XPS 1.0 OPC package using UTF-16LE fixed-payload XML",
+      "signature_ascii": "PK",
+      "observed_structure": {
+        "zip_entries": 1202,
+        "fixed_documents": 1,
+        "fixed_pages": 494,
+        "parsed_visuals": 202852
+      },
+      "redistribution": {
+        "status": "not-confirmed-for-the-complete-file",
+        "policy": "local-download-only",
+        "note": "ECMA publishes this file from the ECMA-388 standard page. It is an interoperability corpus for the shared OPC/XPS backend, not Autodesk-authored DWFx, and is therefore fetched locally rather than committed."
+      }
+    }
+  ]
+}

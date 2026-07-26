@@ -1,0 +1,25 @@
+[package]
+name = "ezdwf-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+
+[lib]
+name = "ezdwf_core"
+
+[dependencies]
+flate2 = { version = "1.1.9", default-features = false, features = ["zlib-rs"] }
+# Keep `zip`'s broad indexmap 2.x dependency on an edition-2021 release so
+# Cargo 1.83 can read the complete dependency graph.
+indexmap.workspace = true
+quick-xml = { version = "0.41.0", features = ["encoding"] }
+serde.workspace = true
+thiserror.workspace = true
+ttf-parser.workspace = true
+zip = { version = "=6.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+serde_json = "1.0"
