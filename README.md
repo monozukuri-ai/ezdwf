@@ -10,7 +10,14 @@ the underlying DWF, W2D, OPC, and XPS records when lower-level data is needed.
 
 ## Installation
 
-Python 3.10 or later is required. From a source checkout, run:
+Python 3.10 or later is required.
+From PYPI.
+
+```console
+pip install ezdwf
+```
+
+From a source checkout, run:
 
 ```console
 python -m pip install .
