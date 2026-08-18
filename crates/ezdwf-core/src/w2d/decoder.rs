@@ -2148,49 +2148,50 @@ impl<'a> Decoder<'a> {
         )
     }
 
+    /// `M` draw-polymarker (ASCII): a marker glyph at each absolute point.
     fn skip_ascii_point_set(&mut self, opcode: &str, start: usize) -> Result<(), DwfError> {
         let count = self.read_ascii_usize(start)?;
         self.check_entity_points(count, start)?;
-        self.account_points(count)?;
+        let mut points = Vec::with_capacity(count.min(4096));
         for _ in 0..count {
-            let _ = self.read_ascii_point()?;
+            points.push(self.read_ascii_point()?);
         }
-        self.push_diagnostic(
-            "W2D_UNSUPPORTED_SINGLE_BYTE_DRAWABLE",
-            DiagnosticSeverity::Warning,
-            format!("{opcode} polymarker/macro drawable is not decoded"),
-            "consumed its known operands",
+        if points.is_empty() {
+            return Ok(());
+        }
+        self.emit(
+            W2dGeometry::Polymarker { points },
             start,
-            Some(opcode.to_owned()),
-        );
-        Ok(())
+            self.position - start,
+            opcode,
+        )
     }
 
+    /// `m` (32-bit) / `0x8D` (16-bit relative) draw-polymarker: markers at each
+    /// point, updating the current point like the other relative drawables.
     fn skip_binary_point_set(&mut self, opcode: u8, start: usize) -> Result<(), DwfError> {
         let count = self.read_count(start)?;
         self.check_entity_points(count, start)?;
-        self.account_points(count)?;
+        let mut points = Vec::with_capacity(count.min(4096));
         if opcode == 0x8D {
             for _ in 0..count {
-                let _ = self.read_relative_point_i16()?;
+                points.push(self.read_relative_point_i16()?);
             }
         } else {
             for _ in 0..count {
-                let _ = self.read_relative_point_i32()?;
+                points.push(self.read_relative_point_i32()?);
             }
         }
-        self.push_diagnostic(
-            "W2D_UNSUPPORTED_SINGLE_BYTE_DRAWABLE",
-            DiagnosticSeverity::Warning,
-            format!(
-                "{} polymarker/macro drawable is not decoded",
-                printable_opcode(opcode)
-            ),
-            "consumed its known operands and preserved current-point state",
+        if points.is_empty() {
+            return Ok(());
+        }
+        let opcode_label = printable_opcode(opcode);
+        self.emit(
+            W2dGeometry::Polymarker { points },
             start,
-            Some(printable_opcode(opcode)),
-        );
-        Ok(())
+            self.position - start,
+            &opcode_label,
+        )
     }
 
     fn emit(
@@ -2953,6 +2954,7 @@ fn geometry_point_count(geometry: &W2dGeometry) -> usize {
     match geometry {
         W2dGeometry::Line { .. } => 2,
         W2dGeometry::Polyline { points }
+        | W2dGeometry::Polymarker { points }
         | W2dGeometry::Polygon { points }
         | W2dGeometry::PolyBezier { points }
         | W2dGeometry::Polytriangle { points }
@@ -2987,6 +2989,7 @@ fn logical_bounds(entities: &[W2dEntity]) -> Option<[i64; 4]> {
                 include(&mut bounds, *end);
             }
             W2dGeometry::Polyline { points }
+            | W2dGeometry::Polymarker { points }
             | W2dGeometry::Polygon { points }
             | W2dGeometry::PolyBezier { points }
             | W2dGeometry::Polytriangle { points }

@@ -682,6 +682,29 @@ def _render_entity_unclipped(
             )
             + "/>"
         ]
+    if entity.kind == "POLYMARKER":
+        # Marker glyphs: a filled dot per point, sized from the stroke width.
+        radius = style.get("stroke-width")
+        try:
+            radius_value = max(float(radius or 0.0) * 1.5, 0.75)
+        except ValueError:
+            radius_value = 0.75
+        stroke = style.get("stroke") or base.get("stroke") or "#000000"
+        return [
+            "    <circle"
+            + _attributes(
+                {
+                    **base,
+                    "cx": formatter.number(_screen(point, min_x, max_y).x),
+                    "cy": formatter.number(_screen(point, min_x, max_y).y),
+                    "r": formatter.number(radius_value),
+                    "fill": stroke if stroke != "none" else "#000000",
+                    "stroke": "none",
+                }
+            )
+            + "/>"
+            for point in entity.points
+        ]
     if entity.kind in {"POLYLINE", "POLYGON"}:
         tag = "polygon" if entity.kind == "POLYGON" else "polyline"
         return [

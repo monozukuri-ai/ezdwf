@@ -391,6 +391,10 @@ pub enum NormalizedGeometry {
     Polyline {
         points: Vec<Point2D>,
     },
+    /// Marker glyphs at each point (draw-polymarker opcodes).
+    Polymarker {
+        points: Vec<Point2D>,
+    },
     Polygon {
         points: Vec<Point2D>,
     },
@@ -452,6 +456,7 @@ impl NormalizedGeometry {
         match self {
             Self::Line { .. } => "LINE",
             Self::Polyline { .. } => "POLYLINE",
+            Self::Polymarker { .. } => "POLYMARKER",
             Self::Polygon { .. } => "POLYGON",
             Self::Circle { .. } => "CIRCLE",
             Self::Arc { .. } => "ARC",
@@ -709,6 +714,9 @@ fn normalize_entity(entity: &W2dEntity, context: NormalizeEntityContext<'_>) -> 
             ],
         },
         W2dGeometry::Polyline { points } => NormalizedGeometry::Polyline {
+            points: transform_points(points, transform),
+        },
+        W2dGeometry::Polymarker { points } => NormalizedGeometry::Polymarker {
             points: transform_points(points, transform),
         },
         W2dGeometry::Polygon { points } => NormalizedGeometry::Polygon {
@@ -1527,6 +1535,7 @@ fn geometry_bounds(entities: &[NormalizedEntity]) -> Option<[f64; 4]> {
         match &entity.geometry {
             NormalizedGeometry::Line { points } => include_points(&mut bounds, points),
             NormalizedGeometry::Polyline { points }
+            | NormalizedGeometry::Polymarker { points }
             | NormalizedGeometry::Polygon { points }
             | NormalizedGeometry::PolyBezier { points }
             | NormalizedGeometry::Polytriangle { points }

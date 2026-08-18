@@ -144,6 +144,10 @@ pub enum W2dGeometry {
     Polyline {
         points: Vec<W2dPoint>,
     },
+    /// Marker glyphs at each point (`M` / `m` / `0x8D` draw-polymarker opcodes).
+    Polymarker {
+        points: Vec<W2dPoint>,
+    },
     Polygon {
         points: Vec<W2dPoint>,
     },
@@ -195,6 +199,7 @@ impl W2dGeometry {
         match self {
             Self::Line { .. } => "line",
             Self::Polyline { .. } => "polyline",
+            Self::Polymarker { .. } => "polymarker",
             Self::Polygon { .. } => "polygon",
             Self::Circle { .. } => "circle",
             Self::Ellipse { .. } => "ellipse",

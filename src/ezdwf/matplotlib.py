@@ -246,6 +246,9 @@ class _Renderer:
         if kind == "POLYLINE":
             self._line(entity.points, entity)
             return
+        if kind == "POLYMARKER":
+            self._polymarker(entity)
+            return
         if kind == "POLYGON":
             self._polygon(entity.points, entity)
             return
@@ -325,6 +328,21 @@ class _Renderer:
         self._line_colors.append(stroke)
         self._line_widths.append(linewidth)
         self._line_styles.append(line_style)
+
+    def _polymarker(self, entity: Entity) -> None:
+        stroke = self._paint(entity, fill=False)
+        if stroke is None or not entity.points:
+            return
+        linewidth = self._line_width(entity)
+        self.ax.scatter(
+            [point.x for point in entity.points],
+            [point.y for point in entity.points],
+            s=max(linewidth * 1.5, 1.0) ** 2,
+            color=stroke,
+            marker="o",
+            linewidths=0,
+            zorder=3,
+        )
 
     def _polygon(
         self,

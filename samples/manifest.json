@@ -225,16 +225,16 @@
       "observed_structure": {
         "zip_entries": 6,
         "eplot_sheets": 1,
-        "entities": 8618,
-        "diagnostics": 20
+        "entities": 8638,
+        "diagnostics": 0
       },
       "parser_expectation": {
         "status": "supported",
         "kind": "dwf_package",
         "version": "06.00",
         "sheet_count": 1,
-        "entity_count": 8618,
-        "diagnostics": 20
+        "entity_count": 8638,
+        "diagnostics": 0
       },
       "redistribution": {
         "status": "source-terms-restrict-redistribution",

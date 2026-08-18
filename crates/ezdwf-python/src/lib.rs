@@ -431,6 +431,7 @@ fn normalized_entity_to_python<'py>(
             value.set_item("points", points.map(point_row))?;
         }
         NormalizedGeometry::Polyline { points }
+        | NormalizedGeometry::Polymarker { points }
         | NormalizedGeometry::Polygon { points }
         | NormalizedGeometry::PolyBezier { points }
         | NormalizedGeometry::Polytriangle { points }
@@ -1704,6 +1705,7 @@ fn w2d_entity_to_python<'py>(py: Python<'py>, entity: &W2dEntity) -> PyResult<Bo
             value.set_item("points", vec![(start.x, start.y), (end.x, end.y)])?;
         }
         W2dGeometry::Polyline { points }
+        | W2dGeometry::Polymarker { points }
         | W2dGeometry::Polygon { points }
         | W2dGeometry::PolyBezier { points }
         | W2dGeometry::Polytriangle { points }
