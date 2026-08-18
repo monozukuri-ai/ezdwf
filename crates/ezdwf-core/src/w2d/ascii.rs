@@ -87,9 +87,8 @@ impl Parser<'_> {
             b'\'' => self.parse_quoted_string(b'\''),
             b'"' => self.parse_hex_string(),
             b')' => Err(self.error("unexpected closing parenthesis")),
-            b'{' | b'}' => {
-                Err(self.error("embedded binary data is not valid in this decoded ASCII operand"))
-            }
+            b'{' => self.parse_binary_string(),
+            b'}' => Err(self.error("unexpected closing brace in decoded ASCII operand")),
             _ => self.parse_atom(),
         }
     }
@@ -136,6 +135,51 @@ impl Parser<'_> {
             }
         }
         Err(self.error("unterminated quoted string"))
+    }
+
+    /// WHIP! binary Unicode string operand: `{` + int32 character count +
+    /// UTF-16LE code units + `}` (used e.g. by `(FontExtension {..} {..})` and
+    /// `(Title {..})` in ePlot streams).
+    fn parse_binary_string(&mut self) -> Result<Node, DwfError> {
+        let start = self.position;
+        self.position += 1;
+        let count_bytes = self
+            .data
+            .get(self.position..self.position + 4)
+            .ok_or_else(|| self.error("truncated binary Unicode string length"))?;
+        let count = i32::from_le_bytes([
+            count_bytes[0],
+            count_bytes[1],
+            count_bytes[2],
+            count_bytes[3],
+        ]);
+        let count = usize::try_from(count)
+            .map_err(|_| self.error("binary Unicode string length cannot be negative"))?;
+        self.position += 4;
+        let byte_count = count
+            .checked_mul(2)
+            .ok_or_else(|| self.error("binary Unicode string length overflow"))?;
+        if byte_count > self.options.max_w2d_string_size {
+            return Err(DwfError::W2dStringLimitExceeded {
+                resource: self.resource.to_owned(),
+                offset: self.source_offset.saturating_add(start),
+                limit: self.options.max_w2d_string_size,
+            });
+        }
+        let payload = self
+            .data
+            .get(self.position..self.position + byte_count)
+            .ok_or_else(|| self.error("truncated binary Unicode string"))?;
+        let units = payload
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        self.position += byte_count;
+        if self.data.get(self.position) != Some(&b'}') {
+            return Err(self.error("binary Unicode string has no closing brace"));
+        }
+        self.position += 1;
+        Ok(Node::String(String::from_utf16_lossy(&units)))
     }
 
     fn parse_hex_string(&mut self) -> Result<Node, DwfError> {

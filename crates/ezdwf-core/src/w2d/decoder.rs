@@ -220,7 +220,7 @@ impl<'a> Decoder<'a> {
         }
         let supported = match header_kind {
             "W2D" => major == "06",
-            "DWF" => major == "00" && matches!(minor, "42" | "55"),
+            "DWF" => major == "00" && matches!(minor, "36" | "42" | "55"),
             _ => false,
         };
         if !supported {
@@ -295,23 +295,32 @@ impl<'a> Decoder<'a> {
                     }
                 }
                 b'{' => {
+                    // Inside an extended ASCII opcode a brace record is a WHIP!
+                    // binary Unicode string: '{' + int32 *character* count +
+                    // UTF-16LE code units + '}' (e.g. `(SourceFilename {...})`
+                    // written by AutoCAD's DWF ePlot driver). Byte-counted blobs
+                    // (with or without the brace counted) are accepted as fallbacks.
                     let length_offset = position.saturating_add(1);
                     let length = self.read_u32_at(length_offset)? as usize;
-                    if length == 0 {
-                        return Err(self.error_at(
-                            position,
-                            "zero-length embedded binary data cannot be skipped",
-                        ));
-                    }
-                    let end = length_offset
+                    let payload_offset = length_offset
                         .checked_add(4)
-                        .and_then(|value| value.checked_add(length))
                         .ok_or_else(|| self.error_at(position, "binary record length overflow"))?;
-                    if end > self.data.len() || self.data[end - 1] != b'}' {
+                    let candidates = [length.checked_mul(2), Some(length), length.checked_sub(1)];
+                    let mut next = None;
+                    for payload_len in candidates.into_iter().flatten() {
+                        let Some(brace_index) = payload_offset.checked_add(payload_len) else {
+                            continue;
+                        };
+                        if self.data.get(brace_index) == Some(&b'}') {
+                            next = Some(brace_index + 1);
+                            break;
+                        }
+                    }
+                    let Some(end) = next else {
                         return Err(
                             self.error_at(position, "invalid embedded binary record length")
                         );
-                    }
+                    };
                     position = end;
                 }
                 _ => position += 1,
@@ -3187,6 +3196,51 @@ mod tests {
         wrapper.extend_from_slice(&encoded);
         wrapper.push(b'}');
         wrapper
+    }
+
+    #[test]
+    fn decodes_binary_unicode_strings_inside_extended_ascii_opcodes() {
+        // AutoCAD's ePlot driver writes metadata and font names as WHIP! binary
+        // Unicode strings ('{' + int32 character count + UTF-16LE + '}').
+        fn ustr(text: &str) -> Vec<u8> {
+            let units = text.encode_utf16().collect::<Vec<_>>();
+            let mut out = vec![b'{'];
+            out.extend_from_slice(&(units.len() as u32).to_le_bytes());
+            for unit in units {
+                out.extend_from_slice(&unit.to_le_bytes());
+            }
+            out.push(b'}');
+            out
+        }
+        let mut data = b"(W2D V06.00)(Title ".to_vec();
+        data.extend_from_slice(&ustr("C-000 表紙"));
+        data.extend_from_slice(b")(Embed 'image/vnd.dwg;' 'AutoCAD' ");
+        data.extend_from_slice(&ustr("C-000 表紙.dwg"));
+        data.extend_from_slice(b" '')(FontExtension ");
+        data.extend_from_slice(&ustr("ＭＳ ゴシック"));
+        data.push(b' ');
+        data.extend_from_slice(&ustr("MS Gothic"));
+        data.extend_from_slice(b")L 0,0 5,5\n(Text 4,6 'hello')(EndOfDWF)");
+
+        let stream = decode_w2d(&data, "sheet/eplot.w2d", ParseOptions::default()).unwrap();
+
+        assert!(stream.end_of_dwf_seen);
+        assert_eq!(stream.entities.len(), 2);
+        let text = &stream.entities[1];
+        assert_eq!(text.rendition.font.name.as_deref(), Some("ＭＳ ゴシック"));
+        assert_eq!(
+            text.rendition.font.canonical_name.as_deref(),
+            Some("MS Gothic")
+        );
+    }
+
+    #[test]
+    fn accepts_legacy_dwf_v036_header() {
+        let data = b"(DWF V00.36)L 0,0 5,5\n(EndOfDWF)";
+        let stream = decode_w2d(data, "<legacy.dwf>", ParseOptions::default()).unwrap();
+        assert_eq!(stream.version, "00.36");
+        assert_eq!(stream.source_format, "legacy_dwf");
+        assert_eq!(stream.entities.len(), 1);
     }
 
     #[test]

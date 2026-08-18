@@ -77,7 +77,7 @@ Run `ezdwf --help` or `ezdwf <command> --help` for all options.
 
 ## Supported input
 
-- Legacy 2D DWF/WHIP streams
+- Legacy 2D DWF/WHIP streams (`(DWF V00.36)`, `V00.42`, `V00.55`)
 - DWF 6 packages containing ePlot/W2D resources
 - DWFx packages containing OPC/OpenXPS fixed pages
 
