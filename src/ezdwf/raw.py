@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeAlias, cast
@@ -983,7 +983,10 @@ def _w2d_entity(value: Mapping[str, Any]) -> W2dEntity:
     )
 
 
-def _w2d_stream(value: Mapping[str, Any]) -> W2dStream:
+def _w2d_stream(
+    value: Mapping[str, Any],
+    entities_override: list[Mapping[str, Any]] | None = None,
+) -> W2dStream:
     return W2dStream(
         href=str(value["href"]),
         role=str(value["role"]),
@@ -1040,7 +1043,14 @@ def _w2d_stream(value: Mapping[str, Any]) -> W2dStream:
         ),
         entities=tuple(
             _w2d_entity(entity)
-            for entity in cast(list[Mapping[str, Any]], value.get("entities", []))
+            for entity in (
+                entities_override
+                if entities_override is not None
+                # A stream SHELL carries entities=None ("deferred"), which the
+                # streaming read path always overrides; `or []` keeps a bare
+                # shell usable rather than crashing on the sentinel.
+                else cast(list[Mapping[str, Any]], value.get("entities") or [])
+            )
         ),
         diagnostics=tuple(
             _diagnostic(diagnostic)
@@ -1051,10 +1061,15 @@ def _w2d_stream(value: Mapping[str, Any]) -> W2dStream:
     )
 
 
-def _package_from_mapping(raw: Mapping[str, Any]) -> PackageInfo:
+def _package_from_mapping(
+    raw: Mapping[str, Any],
+    stream_entities_loader: Callable[[int, int], list[Mapping[str, Any]]] | None = None,
+) -> PackageInfo:
     manifest_value = cast(Mapping[str, Any], raw["manifest"])
     sections = []
-    for value in cast(list[Mapping[str, Any]], manifest_value["sections"]):
+    for section_index, value in enumerate(
+        cast(list[Mapping[str, Any]], manifest_value["sections"])
+    ):
         source_value = cast(Mapping[str, Any] | None, value.get("source"))
         source = (
             SourceInfo(
@@ -1083,9 +1098,19 @@ def _package_from_mapping(raw: Mapping[str, Any]) -> PackageInfo:
                 ),
                 page=_page(cast(Mapping[str, Any] | None, value.get("page"))),
                 w2d_streams=tuple(
-                    _w2d_stream(stream)
-                    for stream in cast(
-                        list[Mapping[str, Any]], value.get("w2d_streams", [])
+                    # With a loader, each stream's entity dicts are fetched,
+                    # folded into dataclasses, and freed before the next
+                    # stream converts — the streaming read path's whole point.
+                    _w2d_stream(
+                        stream,
+                        entities_override=(
+                            stream_entities_loader(section_index, stream_index)
+                            if stream_entities_loader is not None
+                            else None
+                        ),
+                    )
+                    for stream_index, stream in enumerate(
+                        cast(list[Mapping[str, Any]], value.get("w2d_streams", []))
                     )
                 ),
             )
