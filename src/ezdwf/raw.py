@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeAlias, cast
@@ -985,7 +985,7 @@ def _w2d_entity(value: Mapping[str, Any]) -> W2dEntity:
 
 def _w2d_stream(
     value: Mapping[str, Any],
-    entities_override: list[Mapping[str, Any]] | None = None,
+    entities_override: Iterable[Mapping[str, Any]] | None = None,
 ) -> W2dStream:
     return W2dStream(
         href=str(value["href"]),
@@ -1063,7 +1063,7 @@ def _w2d_stream(
 
 def _package_from_mapping(
     raw: Mapping[str, Any],
-    stream_entities_loader: Callable[[int, int], list[Mapping[str, Any]]] | None = None,
+    stream_entities_loader: Callable[[int, int], Iterable[Mapping[str, Any]]] | None = None,
 ) -> PackageInfo:
     manifest_value = cast(Mapping[str, Any], raw["manifest"])
     sections = []

@@ -314,6 +314,56 @@ impl DrawingHandle {
         Ok(normalized_sheet_to_python(py, sheet)?.into_any().unbind())
     }
 
+    /// The sheet dict WITHOUT entities (`entities`/`markup_entities` are
+    /// `None`); fetch them in ranges via `sheet_entities` /
+    /// `sheet_markup_entities`. A 10万要素級のシートを1つのdictツリーで
+    /// 渡すと畳み込み前の一時メモリだけでGB級になるため。
+    fn sheet_shell(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyAny>> {
+        let sheet = self.drawing.sheets.get(index).ok_or_else(|| {
+            pyo3::exceptions::PyIndexError::new_err(format!(
+                "sheet index {index} out of range (0..{})",
+                self.drawing.sheets.len()
+            ))
+        })?;
+        Ok(normalized_sheet_to_python_impl(py, sheet, false)?
+            .into_any()
+            .unbind())
+    }
+
+    /// A slice of one sheet's normalized entity dicts (empty past the end).
+    fn sheet_entities(
+        &self,
+        py: Python<'_>,
+        index: usize,
+        start: usize,
+        count: usize,
+    ) -> PyResult<Py<PyAny>> {
+        let sheet = self.drawing.sheets.get(index).ok_or_else(|| {
+            pyo3::exceptions::PyIndexError::new_err(format!(
+                "sheet index {index} out of range (0..{})",
+                self.drawing.sheets.len()
+            ))
+        })?;
+        entity_slice_to_python(py, &sheet.entities, start, count)
+    }
+
+    /// A slice of one sheet's markup entity dicts (empty past the end).
+    fn sheet_markup_entities(
+        &self,
+        py: Python<'_>,
+        index: usize,
+        start: usize,
+        count: usize,
+    ) -> PyResult<Py<PyAny>> {
+        let sheet = self.drawing.sheets.get(index).ok_or_else(|| {
+            pyo3::exceptions::PyIndexError::new_err(format!(
+                "sheet index {index} out of range (0..{})",
+                self.drawing.sheets.len()
+            ))
+        })?;
+        entity_slice_to_python(py, &sheet.markup_entities, start, count)
+    }
+
     /// The package dict WITHOUT per-stream entity display lists (each
     /// stream's `entities` is `None`); fetch them per stream via
     /// `stream_entities`. Errors for non-package formats.
@@ -327,12 +377,15 @@ impl DrawingHandle {
             .unbind())
     }
 
-    /// One W2D stream's raw entity dicts, in display-list order.
+    /// A slice of one W2D stream's raw entity dicts, in display-list order
+    /// (empty past the end).
     fn stream_entities(
         &self,
         py: Python<'_>,
         section_index: usize,
         stream_index: usize,
+        start: usize,
+        count: usize,
     ) -> PyResult<Py<PyAny>> {
         let package = self
             .package
@@ -355,7 +408,8 @@ impl DrawingHandle {
             ))
         })?;
         let entities = PyList::empty(py);
-        for entity in &stream.entities {
+        let end = start.saturating_add(count).min(stream.entities.len());
+        for entity in &stream.entities[start.min(stream.entities.len())..end] {
             entities.append(w2d_entity_to_python(py, entity)?)?;
         }
         Ok(entities.into_any().unbind())
@@ -572,9 +626,31 @@ fn normalized_drawing_to_python<'py>(
     Ok(value)
 }
 
+fn entity_slice_to_python(
+    py: Python<'_>,
+    entities: &[NormalizedEntity],
+    start: usize,
+    count: usize,
+) -> PyResult<Py<PyAny>> {
+    let list = PyList::empty(py);
+    let end = start.saturating_add(count).min(entities.len());
+    for entity in &entities[start.min(entities.len())..end] {
+        list.append(normalized_entity_to_python(py, entity)?)?;
+    }
+    Ok(list.into_any().unbind())
+}
+
 fn normalized_sheet_to_python<'py>(
     py: Python<'py>,
     sheet: &NormalizedSheet,
+) -> PyResult<Bound<'py, PyDict>> {
+    normalized_sheet_to_python_impl(py, sheet, true)
+}
+
+fn normalized_sheet_to_python_impl<'py>(
+    py: Python<'py>,
+    sheet: &NormalizedSheet,
+    include_entities: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
     let sheet_value = PyDict::new(py);
     sheet_value.set_item("section_index", sheet.section_index)?;
@@ -586,16 +662,21 @@ fn normalized_sheet_to_python<'py>(
     sheet_value.set_item("clip", sheet.clip.map(Vec::from))?;
     sheet_value.set_item("background_color", sheet.background_color.map(Vec::from))?;
     sheet_value.set_item("content_bounds", sheet.content_bounds.map(Vec::from))?;
-    let entities = PyList::empty(py);
-    for entity in &sheet.entities {
-        entities.append(normalized_entity_to_python(py, entity)?)?;
+    if include_entities {
+        let entities = PyList::empty(py);
+        for entity in &sheet.entities {
+            entities.append(normalized_entity_to_python(py, entity)?)?;
+        }
+        sheet_value.set_item("entities", entities)?;
+        let markup_entities = PyList::empty(py);
+        for entity in &sheet.markup_entities {
+            markup_entities.append(normalized_entity_to_python(py, entity)?)?;
+        }
+        sheet_value.set_item("markup_entities", markup_entities)?;
+    } else {
+        sheet_value.set_item("entities", py.None())?;
+        sheet_value.set_item("markup_entities", py.None())?;
     }
-    sheet_value.set_item("entities", entities)?;
-    let markup_entities = PyList::empty(py);
-    for entity in &sheet.markup_entities {
-        markup_entities.append(normalized_entity_to_python(py, entity)?)?;
-    }
-    sheet_value.set_item("markup_entities", markup_entities)?;
     Ok(sheet_value)
 }
 

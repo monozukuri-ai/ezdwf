@@ -80,8 +80,23 @@ def test_drawing_handle_defers_package_entities(dwf_bytes: bytes) -> None:
     shell_stream = package_shell["manifest"]["sections"][0]["w2d_streams"][0]
     eager_stream = eager["package"]["manifest"]["sections"][0]["w2d_streams"][0]
     assert shell_stream["entities"] is None
-    assert handle.stream_entities(0, 0) == eager_stream["entities"]
+    assert (
+        handle.stream_entities(0, 0, 0, 1_000_000) == eager_stream["entities"]
+    )
+    # 範囲取得: 分割しても連結すれば同一、末尾超えは空
+    first = handle.stream_entities(0, 0, 0, 1)
+    rest = handle.stream_entities(0, 0, 1, 1_000_000)
+    assert first + rest == eager_stream["entities"]
+    assert handle.stream_entities(0, 0, 10_000_000, 10) == []
     assert handle.sheet(0) == eager["drawing"]["sheets"][0]
+
+    # shell + 範囲取得でシートを組み直しても一括取得と一致する
+    shell = dict(handle.sheet_shell(0))
+    assert shell["entities"] is None and shell["markup_entities"] is None
+    shell["entities"] = handle.sheet_entities(0, 0, 1_000_000)
+    shell["markup_entities"] = handle.sheet_markup_entities(0, 0, 1_000_000)
+    assert shell == eager["drawing"]["sheets"][0]
+    assert handle.sheet_entities(0, 10_000_000, 5) == []
 
     with pytest.raises(IndexError, match="sheet index 1 out of range"):
         handle.sheet(1)

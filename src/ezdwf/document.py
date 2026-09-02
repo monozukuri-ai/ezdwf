@@ -848,6 +848,24 @@ def _sheet_from_mapping(
     )
 
 
+_HANDLE_CHUNK = 4096
+
+
+def _chunked_rows(fetch: "Callable[[int, int], list[Mapping[str, Any]]]"):
+    """範囲フェッチを空バッチまで繰り返すジェネレータ(dictは畳み込み後に解放)。"""
+
+    def rows():
+        start = 0
+        while True:
+            batch = fetch(start, _HANDLE_CHUNK)
+            if not batch:
+                return
+            yield from batch
+            start += len(batch)
+
+    return rows()
+
+
 def _drawing_from_handle(
     handle: Any,
     *,
@@ -863,7 +881,12 @@ def _drawing_from_handle(
     if kind == "package":
         shell = cast(Mapping[str, Any], handle.package_shell())
         package = _package_from_mapping(
-            shell, stream_entities_loader=handle.stream_entities
+            shell,
+            stream_entities_loader=lambda section_index, stream_index: _chunked_rows(
+                lambda start, count: handle.stream_entities(
+                    section_index, stream_index, start, count
+                )
+            ),
         )
         del shell
     elif kind == "legacy":
@@ -876,7 +899,18 @@ def _drawing_from_handle(
         )
     sheets = []
     for index in range(handle.sheet_count()):
-        sheet_value = cast(Mapping[str, Any], handle.sheet(index))
+        # シート本体はエンティティ抜きのshellで受け取り、エンティティは
+        # 範囲取得のジェネレータで逐次dict→データクラス化する。10万要素級の
+        # シートを1つのdictツリーで受けると一時メモリだけでGB級になる
+        sheet_value = dict(cast(Mapping[str, Any], handle.sheet_shell(index)))
+        sheet_value["entities"] = _chunked_rows(
+            lambda start, count, index=index: handle.sheet_entities(index, start, count)
+        )
+        sheet_value["markup_entities"] = _chunked_rows(
+            lambda start, count, index=index: handle.sheet_markup_entities(
+                index, start, count
+            )
+        )
         sheets.append(
             _sheet_from_mapping(sheet_value, package, legacy_stream, dwfx_package)
         )
