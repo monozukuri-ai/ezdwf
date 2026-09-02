@@ -792,7 +792,9 @@ def _drawing_from_mapping(
     drawing_value = cast(Mapping[str, Any], result["drawing"])
     sheets = [
         _sheet_from_mapping(sheet_value, package, legacy_stream, dwfx_package)
-        for sheet_value in cast(list[Mapping[str, Any]], drawing_value.get("sheets", []))
+        for sheet_value in cast(
+            list[Mapping[str, Any]], drawing_value.get("sheets", [])
+        )
     ]
     return Drawing(
         package=package,
@@ -869,7 +871,9 @@ def _drawing_from_handle(
 
         legacy_stream = _w2d_stream(cast(Mapping[str, Any], handle.legacy_stream()))
     else:
-        dwfx_package = _dwfx_from_mapping(cast(Mapping[str, Any], handle.dwfx_package()))
+        dwfx_package = _dwfx_from_mapping(
+            cast(Mapping[str, Any], handle.dwfx_package())
+        )
     sheets = []
     for index in range(handle.sheet_count()):
         sheet_value = cast(Mapping[str, Any], handle.sheet(index))

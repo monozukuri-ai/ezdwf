@@ -22,6 +22,17 @@ class InvalidDwfError(DwfError): ...
 class UnsupportedDwfError(DwfError): ...
 class DwfLimitError(DwfError): ...
 
+class DrawingHandle:
+    def kind(self) -> str: ...
+    def sheet_count(self) -> int: ...
+    def sheet(self, index: int) -> dict[str, Any]: ...
+    def package_shell(self) -> dict[str, Any]: ...
+    def stream_entities(
+        self, section_index: int, stream_index: int
+    ) -> list[dict[str, Any]]: ...
+    def legacy_stream(self) -> dict[str, Any]: ...
+    def dwfx_package(self) -> dict[str, Any]: ...
+
 def core_version() -> str: ...
 def detect_format_bytes(
     data: bytes,
@@ -99,6 +110,25 @@ def read_drawing_bytes(
     max_xps_visuals: int,
     max_xps_path_segments: int,
 ) -> dict[str, Any]: ...
+def read_drawing_handle(
+    data: bytes,
+    max_file_size: int,
+    max_archive_entries: int,
+    max_entry_size: int,
+    max_total_uncompressed_size: int,
+    max_compression_ratio: int,
+    max_xml_size: int,
+    max_xml_depth: int,
+    max_w2d_records: int,
+    max_w2d_points_per_entity: int,
+    max_w2d_total_points: int,
+    max_w2d_string_size: int,
+    max_w2d_nesting_depth: int,
+    max_w2d_decompressed_size: int,
+    max_w2d_compression_depth: int,
+    max_xps_visuals: int,
+    max_xps_path_segments: int,
+) -> DrawingHandle: ...
 def decode_w2d_bytes(
     data: bytes,
     resource: str,

@@ -6,9 +6,10 @@ use ezdwf_core::{
     decode_w2d as decode_w2d_core, detect_format, inspect_dwfx,
     inspect_dwfx_without_glyph_outlines, inspect_package, normalize_dwfx, normalize_package,
     normalize_stream, DwfError as CoreDwfError, DwfFormat, DwfPackage, DwfxPackage, EPlotPage,
-    NormalizedBrush, NormalizedDrawing, NormalizedEntity, NormalizedGeometry, NormalizedSheet,
-    NormalizedPathSegment, NormalizedStyle, ParseOptions, Point2D, W2dEntity, W2dGeometry,
-    W2dRendition, W2dStream, W2dUnits, XpsBrush, XpsEntity, XpsGeometry, XpsPathSegment,
+    NormalizedBrush, NormalizedDrawing, NormalizedEntity, NormalizedGeometry,
+    NormalizedPathSegment, NormalizedSheet, NormalizedStyle, ParseOptions, Point2D, W2dEntity,
+    W2dGeometry, W2dRendition, W2dStream, W2dUnits, XpsBrush, XpsEntity, XpsGeometry,
+    XpsPathSegment,
 };
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -317,10 +318,13 @@ impl DrawingHandle {
     /// stream's `entities` is `None`); fetch them per stream via
     /// `stream_entities`. Errors for non-package formats.
     fn package_shell(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let package = self.package.as_ref().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("not a DWF 6 package")
-        })?;
-        Ok(package_to_python_impl(py, package, false)?.into_any().unbind())
+        let package = self
+            .package
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("not a DWF 6 package"))?;
+        Ok(package_to_python_impl(py, package, false)?
+            .into_any()
+            .unbind())
     }
 
     /// One W2D stream's raw entity dicts, in display-list order.
@@ -330,15 +334,20 @@ impl DrawingHandle {
         section_index: usize,
         stream_index: usize,
     ) -> PyResult<Py<PyAny>> {
-        let package = self.package.as_ref().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("not a DWF 6 package")
-        })?;
-        let section = package.manifest.sections.get(section_index).ok_or_else(|| {
-            pyo3::exceptions::PyIndexError::new_err(format!(
-                "section index {section_index} out of range (0..{})",
-                package.manifest.sections.len()
-            ))
-        })?;
+        let package = self
+            .package
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("not a DWF 6 package"))?;
+        let section = package
+            .manifest
+            .sections
+            .get(section_index)
+            .ok_or_else(|| {
+                pyo3::exceptions::PyIndexError::new_err(format!(
+                    "section index {section_index} out of range (0..{})",
+                    package.manifest.sections.len()
+                ))
+            })?;
         let stream = section.w2d_streams.get(stream_index).ok_or_else(|| {
             pyo3::exceptions::PyIndexError::new_err(format!(
                 "stream index {stream_index} out of range (0..{})",
@@ -354,17 +363,19 @@ impl DrawingHandle {
 
     /// Full legacy-stream dict (single display list; not worth streaming).
     fn legacy_stream(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let stream = self.legacy_stream.as_ref().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("not a legacy 2D stream")
-        })?;
+        let stream = self
+            .legacy_stream
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("not a legacy 2D stream"))?;
         Ok(w2d_stream_to_python(py, stream)?.into_any().unbind())
     }
 
     /// Full DWFx package dict (XPS pages carry their own model).
     fn dwfx_package(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let package = self.dwfx_package.as_ref().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("not a DWFx package")
-        })?;
+        let package = self
+            .dwfx_package
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("not a DWFx package"))?;
         Ok(dwfx_to_python(py, package)?.into_any().unbind())
     }
 }
@@ -1197,7 +1208,11 @@ fn package_to_python_impl<'py>(
         value.set_item("resources", resources)?;
         let streams = PyList::empty(py);
         for stream in &section.w2d_streams {
-            streams.append(w2d_stream_to_python_impl(py, stream, include_stream_entities)?)?;
+            streams.append(w2d_stream_to_python_impl(
+                py,
+                stream,
+                include_stream_entities,
+            )?)?;
         }
         value.set_item("w2d_streams", streams)?;
         value.set_item(
