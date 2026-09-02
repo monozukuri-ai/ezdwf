@@ -5,9 +5,12 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
-from conftest import make_dwf
+from conftest import make_dwf, make_dwfx
 
 import ezdwf
+from ezdwf import _core
+from ezdwf.document import _drawing_from_mapping
+from ezdwf.raw import DEFAULT_LIMITS
 
 SNAPSHOTS = Path(__file__).parent / "snapshots"
 
@@ -42,6 +45,46 @@ def test_read_builds_normalized_sheet_and_keeps_raw_links(dwf_bytes: bytes) -> N
     assert polygon.style.nominal_stroke_width == 20.0
     assert polygon.raw is drawing.raw.sheets[0].entities[0]
     assert polygon.source == polygon.raw.source
+
+
+@pytest.mark.parametrize(
+    "data",
+    (
+        make_dwf(),
+        b"(DWF V00.55)(Line 0,0 5,5)(EndOfDWF)",
+        make_dwfx(),
+    ),
+    ids=("package", "legacy", "dwfx"),
+)
+def test_streaming_read_matches_eager_mapping(data: bytes) -> None:
+    eager_mapping = _core.read_drawing_bytes(data, *DEFAULT_LIMITS.as_args())
+    eager = _drawing_from_mapping(eager_mapping, source_name=None)
+    streamed = ezdwf.read(data)
+
+    assert streamed.package == eager.package
+    assert streamed.legacy_stream == eager.legacy_stream
+    assert streamed.dwfx_package == eager.dwfx_package
+    assert tuple(sheet.snapshot() for sheet in streamed.sheets) == tuple(
+        sheet.snapshot() for sheet in eager.sheets
+    )
+
+
+def test_drawing_handle_defers_package_entities(dwf_bytes: bytes) -> None:
+    eager = _core.read_drawing_bytes(dwf_bytes, *DEFAULT_LIMITS.as_args())
+    handle = _core.read_drawing_handle(dwf_bytes, *DEFAULT_LIMITS.as_args())
+
+    assert handle.kind() == "package"
+    assert handle.sheet_count() == 1
+
+    package_shell = handle.package_shell()
+    shell_stream = package_shell["manifest"]["sections"][0]["w2d_streams"][0]
+    eager_stream = eager["package"]["manifest"]["sections"][0]["w2d_streams"][0]
+    assert shell_stream["entities"] is None
+    assert handle.stream_entities(0, 0) == eager_stream["entities"]
+    assert handle.sheet(0) == eager["drawing"]["sheets"][0]
+
+    with pytest.raises(IndexError, match="sheet index 1 out of range"):
+        handle.sheet(1)
 
 
 def test_entity_query_is_chainable_and_validates_selectors(dwf_bytes: bytes) -> None:

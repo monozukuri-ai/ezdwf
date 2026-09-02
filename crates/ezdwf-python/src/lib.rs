@@ -7,8 +7,9 @@ use ezdwf_core::{
     inspect_dwfx_without_glyph_outlines, inspect_package, normalize_dwfx, normalize_package,
     normalize_stream, DwfError as CoreDwfError, DwfFormat, DwfPackage, DwfxPackage, EPlotPage,
     NormalizedBrush, NormalizedDrawing, NormalizedEntity, NormalizedGeometry,
-    NormalizedPathSegment, NormalizedStyle, ParseOptions, Point2D, W2dEntity, W2dGeometry,
-    W2dRendition, W2dStream, W2dUnits, XpsBrush, XpsEntity, XpsGeometry, XpsPathSegment,
+    NormalizedPathSegment, NormalizedSheet, NormalizedStyle, ParseOptions, Point2D, W2dEntity,
+    W2dGeometry, W2dRendition, W2dStream, W2dUnits, XpsBrush, XpsEntity, XpsGeometry,
+    XpsPathSegment,
 };
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -264,6 +265,198 @@ fn read_drawing_bytes(
     Ok(output.into_any().unbind())
 }
 
+/// Rust-side holder for a parsed drawing, exposed so the Python layer can
+/// pull the result in PIECES instead of one monolithic dict tree.
+///
+/// `read_drawing_bytes` converts the raw package, every W2D display list and
+/// every normalized sheet into Python objects in a single call, so all of
+/// them are alive at once — on a real 9-sheet plot set (74k entities) that
+/// transient tree peaks over 1 GB for a 630 KB file. The handle keeps the
+/// parsed data in Rust and converts on demand: the package shell (without
+/// per-entity display lists), then one stream's entities at a time, then one
+/// normalized sheet at a time. The Python wrapper frees each piece's dict as
+/// soon as it has folded it into its dataclasses, so peak memory tracks the
+/// LARGEST piece rather than the sum of all of them.
+#[pyclass(module = "ezdwf._core", frozen)]
+struct DrawingHandle {
+    package: Option<DwfPackage>,
+    legacy_stream: Option<W2dStream>,
+    dwfx_package: Option<DwfxPackage>,
+    drawing: NormalizedDrawing,
+}
+
+#[pymethods]
+impl DrawingHandle {
+    /// Which container format was parsed: "package" | "legacy" | "dwfx".
+    fn kind(&self) -> &'static str {
+        if self.package.is_some() {
+            "package"
+        } else if self.legacy_stream.is_some() {
+            "legacy"
+        } else {
+            "dwfx"
+        }
+    }
+
+    fn sheet_count(&self) -> usize {
+        self.drawing.sheets.len()
+    }
+
+    /// One normalized sheet as the same dict `read_drawing_bytes` produced
+    /// inside `drawing.sheets[index]`.
+    fn sheet(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyAny>> {
+        let sheet = self.drawing.sheets.get(index).ok_or_else(|| {
+            pyo3::exceptions::PyIndexError::new_err(format!(
+                "sheet index {index} out of range (0..{})",
+                self.drawing.sheets.len()
+            ))
+        })?;
+        Ok(normalized_sheet_to_python(py, sheet)?.into_any().unbind())
+    }
+
+    /// The package dict WITHOUT per-stream entity display lists (each
+    /// stream's `entities` is `None`); fetch them per stream via
+    /// `stream_entities`. Errors for non-package formats.
+    fn package_shell(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let package = self
+            .package
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("not a DWF 6 package"))?;
+        Ok(package_to_python_impl(py, package, false)?
+            .into_any()
+            .unbind())
+    }
+
+    /// One W2D stream's raw entity dicts, in display-list order.
+    fn stream_entities(
+        &self,
+        py: Python<'_>,
+        section_index: usize,
+        stream_index: usize,
+    ) -> PyResult<Py<PyAny>> {
+        let package = self
+            .package
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("not a DWF 6 package"))?;
+        let section = package
+            .manifest
+            .sections
+            .get(section_index)
+            .ok_or_else(|| {
+                pyo3::exceptions::PyIndexError::new_err(format!(
+                    "section index {section_index} out of range (0..{})",
+                    package.manifest.sections.len()
+                ))
+            })?;
+        let stream = section.w2d_streams.get(stream_index).ok_or_else(|| {
+            pyo3::exceptions::PyIndexError::new_err(format!(
+                "stream index {stream_index} out of range (0..{})",
+                section.w2d_streams.len()
+            ))
+        })?;
+        let entities = PyList::empty(py);
+        for entity in &stream.entities {
+            entities.append(w2d_entity_to_python(py, entity)?)?;
+        }
+        Ok(entities.into_any().unbind())
+    }
+
+    /// Full legacy-stream dict (single display list; not worth streaming).
+    fn legacy_stream(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let stream = self
+            .legacy_stream
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("not a legacy 2D stream"))?;
+        Ok(w2d_stream_to_python(py, stream)?.into_any().unbind())
+    }
+
+    /// Full DWFx package dict (XPS pages carry their own model).
+    fn dwfx_package(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let package = self
+            .dwfx_package
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("not a DWFx package"))?;
+        Ok(dwfx_to_python(py, package)?.into_any().unbind())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+fn read_drawing_handle(
+    data: &[u8],
+    max_file_size: usize,
+    max_archive_entries: usize,
+    max_entry_size: usize,
+    max_total_uncompressed_size: usize,
+    max_compression_ratio: usize,
+    max_xml_size: usize,
+    max_xml_depth: usize,
+    max_w2d_records: usize,
+    max_w2d_points_per_entity: usize,
+    max_w2d_total_points: usize,
+    max_w2d_string_size: usize,
+    max_w2d_nesting_depth: usize,
+    max_w2d_decompressed_size: usize,
+    max_w2d_compression_depth: usize,
+    max_xps_visuals: usize,
+    max_xps_path_segments: usize,
+) -> PyResult<DrawingHandle> {
+    let options = parse_options(
+        max_file_size,
+        max_archive_entries,
+        max_entry_size,
+        max_total_uncompressed_size,
+        max_compression_ratio,
+        max_xml_size,
+        max_xml_depth,
+        max_w2d_records,
+        max_w2d_points_per_entity,
+        max_w2d_total_points,
+        max_w2d_string_size,
+        max_w2d_nesting_depth,
+        max_w2d_decompressed_size,
+        max_w2d_compression_depth,
+        max_xps_visuals,
+        max_xps_path_segments,
+    );
+    let format = detect_format(data, options).map_err(core_error_to_python)?;
+    match format {
+        DwfFormat::DwfPackage { .. } => {
+            let package = inspect_package(data, options).map_err(core_error_to_python)?;
+            let drawing = normalize_package(&package).map_err(core_error_to_python)?;
+            Ok(DrawingHandle {
+                package: Some(package),
+                legacy_stream: None,
+                dwfx_package: None,
+                drawing,
+            })
+        }
+        DwfFormat::LegacyDwf { .. } => {
+            let mut stream =
+                decode_w2d_core(data, "<legacy.dwf>", options).map_err(core_error_to_python)?;
+            stream.role = "legacy 2d streaming graphics".to_owned();
+            stream.mime = "application/x-dwf".to_owned();
+            let drawing = normalize_stream(&stream);
+            Ok(DrawingHandle {
+                package: None,
+                legacy_stream: Some(stream),
+                dwfx_package: None,
+                drawing,
+            })
+        }
+        DwfFormat::Dwfx => {
+            let package = inspect_dwfx(data, options).map_err(core_error_to_python)?;
+            let drawing = normalize_dwfx(&package);
+            Ok(DrawingHandle {
+                package: None,
+                legacy_stream: None,
+                dwfx_package: Some(package),
+                drawing,
+            })
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
 fn decode_w2d_bytes(
@@ -373,30 +566,37 @@ fn normalized_drawing_to_python<'py>(
     let value = PyDict::new(py);
     let sheets = PyList::empty(py);
     for sheet in &drawing.sheets {
-        let sheet_value = PyDict::new(py);
-        sheet_value.set_item("section_index", sheet.section_index)?;
-        sheet_value.set_item("name", &sheet.name)?;
-        sheet_value.set_item("title", &sheet.title)?;
-        sheet_value.set_item("plot_order", sheet.plot_order)?;
-        sheet_value.set_item("units", &sheet.units)?;
-        sheet_value.set_item("paper_bounds", sheet.paper_bounds.map(Vec::from))?;
-        sheet_value.set_item("clip", sheet.clip.map(Vec::from))?;
-        sheet_value.set_item("background_color", sheet.background_color.map(Vec::from))?;
-        sheet_value.set_item("content_bounds", sheet.content_bounds.map(Vec::from))?;
-        let entities = PyList::empty(py);
-        for entity in &sheet.entities {
-            entities.append(normalized_entity_to_python(py, entity)?)?;
-        }
-        sheet_value.set_item("entities", entities)?;
-        let markup_entities = PyList::empty(py);
-        for entity in &sheet.markup_entities {
-            markup_entities.append(normalized_entity_to_python(py, entity)?)?;
-        }
-        sheet_value.set_item("markup_entities", markup_entities)?;
-        sheets.append(sheet_value)?;
+        sheets.append(normalized_sheet_to_python(py, sheet)?)?;
     }
     value.set_item("sheets", sheets)?;
     Ok(value)
+}
+
+fn normalized_sheet_to_python<'py>(
+    py: Python<'py>,
+    sheet: &NormalizedSheet,
+) -> PyResult<Bound<'py, PyDict>> {
+    let sheet_value = PyDict::new(py);
+    sheet_value.set_item("section_index", sheet.section_index)?;
+    sheet_value.set_item("name", &sheet.name)?;
+    sheet_value.set_item("title", &sheet.title)?;
+    sheet_value.set_item("plot_order", sheet.plot_order)?;
+    sheet_value.set_item("units", &sheet.units)?;
+    sheet_value.set_item("paper_bounds", sheet.paper_bounds.map(Vec::from))?;
+    sheet_value.set_item("clip", sheet.clip.map(Vec::from))?;
+    sheet_value.set_item("background_color", sheet.background_color.map(Vec::from))?;
+    sheet_value.set_item("content_bounds", sheet.content_bounds.map(Vec::from))?;
+    let entities = PyList::empty(py);
+    for entity in &sheet.entities {
+        entities.append(normalized_entity_to_python(py, entity)?)?;
+    }
+    sheet_value.set_item("entities", entities)?;
+    let markup_entities = PyList::empty(py);
+    for entity in &sheet.markup_entities {
+        markup_entities.append(normalized_entity_to_python(py, entity)?)?;
+    }
+    sheet_value.set_item("markup_entities", markup_entities)?;
+    Ok(sheet_value)
 }
 
 fn normalized_entity_to_python<'py>(
@@ -938,6 +1138,14 @@ fn point_row(point: Point2D) -> (f64, f64) {
 }
 
 fn package_to_python<'py>(py: Python<'py>, package: &DwfPackage) -> PyResult<Bound<'py, PyDict>> {
+    package_to_python_impl(py, package, true)
+}
+
+fn package_to_python_impl<'py>(
+    py: Python<'py>,
+    package: &DwfPackage,
+    include_stream_entities: bool,
+) -> PyResult<Bound<'py, PyDict>> {
     let output = PyDict::new(py);
     output.set_item("format", format_row(&package.format))?;
 
@@ -1000,7 +1208,11 @@ fn package_to_python<'py>(py: Python<'py>, package: &DwfPackage) -> PyResult<Bou
         value.set_item("resources", resources)?;
         let streams = PyList::empty(py);
         for stream in &section.w2d_streams {
-            streams.append(w2d_stream_to_python(py, stream)?)?;
+            streams.append(w2d_stream_to_python_impl(
+                py,
+                stream,
+                include_stream_entities,
+            )?)?;
         }
         value.set_item("w2d_streams", streams)?;
         value.set_item(
@@ -1567,6 +1779,20 @@ fn xps_path_to_python<'py>(
 }
 
 fn w2d_stream_to_python<'py>(py: Python<'py>, stream: &W2dStream) -> PyResult<Bound<'py, PyDict>> {
+    w2d_stream_to_python_impl(py, stream, true)
+}
+
+/// `include_entities: false` renders the stream SHELL — everything except the
+/// per-entity display list, which dominates the dict's size on real plot
+/// sets. The streaming read path fetches entities per stream afterwards
+/// (`DrawingHandle::stream_entities`) so only one stream's entity dicts are
+/// ever alive at once; `entities` is set to `None` (not `[]`) so a consumer
+/// can tell "deferred" from "genuinely empty".
+fn w2d_stream_to_python_impl<'py>(
+    py: Python<'py>,
+    stream: &W2dStream,
+    include_entities: bool,
+) -> PyResult<Bound<'py, PyDict>> {
     let value = PyDict::new(py);
     value.set_item("href", &stream.href)?;
     value.set_item("role", &stream.role)?;
@@ -1663,11 +1889,15 @@ fn w2d_stream_to_python<'py>(py: Python<'py>, stream: &W2dStream) -> PyResult<Bo
     }
     value.set_item("block_refs", block_refs)?;
 
-    let entities = PyList::empty(py);
-    for entity in &stream.entities {
-        entities.append(w2d_entity_to_python(py, entity)?)?;
+    if include_entities {
+        let entities = PyList::empty(py);
+        for entity in &stream.entities {
+            entities.append(w2d_entity_to_python(py, entity)?)?;
+        }
+        value.set_item("entities", entities)?;
+    } else {
+        value.set_item("entities", py.None())?;
     }
-    value.set_item("entities", entities)?;
 
     let diagnostics = PyList::empty(py);
     for diagnostic in &stream.diagnostics {
@@ -2056,6 +2286,8 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(inspect_package_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(inspect_dwfx_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(read_drawing_bytes, module)?)?;
+    module.add_function(wrap_pyfunction!(read_drawing_handle, module)?)?;
+    module.add_class::<DrawingHandle>()?;
     module.add_function(wrap_pyfunction!(decode_w2d_bytes, module)?)?;
     Ok(())
 }
