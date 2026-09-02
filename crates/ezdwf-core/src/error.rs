@@ -120,6 +120,9 @@ pub enum DwfError {
     #[error("W2D version {version} in {resource:?} is recognized but unsupported")]
     UnsupportedW2dVersion { resource: String, version: String },
 
+    #[error("DWFx package contains {found}; only 2D plot (ePlot) content can be read")]
+    UnsupportedDwfxContent { found: String },
+
     #[error("W2D resource {resource:?} is {actual} bytes, exceeding configured limit {limit}")]
     W2dSourceSizeLimitExceeded {
         resource: String,
@@ -218,6 +221,7 @@ impl DwfError {
                 | Self::EncryptedEntry { .. }
                 | Self::UnsupportedW2dOpcode { .. }
                 | Self::UnsupportedW2dVersion { .. }
+                | Self::UnsupportedDwfxContent { .. }
         )
     }
 }

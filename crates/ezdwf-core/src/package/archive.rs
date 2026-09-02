@@ -195,17 +195,32 @@ impl<'a> PackageArchive<'a> {
         if !self.contains("[Content_Types].xml") || !self.contains("_rels/.rels") {
             return Ok(false);
         }
-        if !self.entries.iter().any(|entry| {
-            entry
-                .normalized_name
-                .to_ascii_lowercase()
-                .ends_with(".fdseq")
-        }) {
+        let entry_extension = |suffix: &str| {
+            self.entries
+                .iter()
+                .any(|entry| entry.normalized_name.to_ascii_lowercase().ends_with(suffix))
+        };
+        // XPS viewers need a FixedDocumentSequence (.fdseq); DWFx writers that
+        // skip the XPS half (3D eModel exports among them) still carry the DWF
+        // document sequence (.dwfseq).
+        let has_xps_sequence = entry_extension(".fdseq");
+        let has_dwf_sequence = entry_extension(".dwfseq");
+        if !has_xps_sequence && !has_dwf_sequence {
             return Ok(false);
+        }
+        if has_dwf_sequence && !has_xps_sequence {
+            return Ok(true);
         }
         let content_types = self.read_entry("[Content_Types].xml", options.max_xml_size)?;
         let content_types = String::from_utf8_lossy(&content_types).to_ascii_lowercase();
         Ok(content_types.contains("fixeddocumentsequence"))
+    }
+
+    /// Normalized entry names, for content classification.
+    pub(crate) fn entry_names(&self) -> impl Iterator<Item = &str> {
+        self.entries
+            .iter()
+            .map(|entry| entry.normalized_name.as_str())
     }
 }
 

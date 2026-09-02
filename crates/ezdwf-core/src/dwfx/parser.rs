@@ -85,9 +85,26 @@ fn inspect_dwfx_impl(
                 }
             })
         })
-        .ok_or_else(|| DwfError::InvalidOpc {
-            part: ROOT_RELATIONSHIPS_PART.to_owned(),
-            context: "package has no internal fixed-representation relationship".to_owned(),
+        .ok_or_else(|| {
+            // No XPS document at all: classify by the DWF section kinds so a
+            // 3D-only package gets an actionable message instead of an OPC
+            // structure error.
+            let mut has_emodel = false;
+            let mut has_eplot = false;
+            for name in archive.entry_names() {
+                let name = name.to_ascii_lowercase();
+                has_emodel |= name.contains(".emodel_");
+                has_eplot |= name.contains(".eplot_");
+            }
+            if has_emodel && !has_eplot {
+                return DwfError::UnsupportedDwfxContent {
+                    found: "only 3D model (eModel) sections".to_owned(),
+                };
+            }
+            DwfError::InvalidOpc {
+                part: ROOT_RELATIONSHIPS_PART.to_owned(),
+                context: "package has no internal fixed-representation relationship".to_owned(),
+            }
         })?;
     require_part(&archive, "/", &document_sequence, &document_sequence)?;
 
