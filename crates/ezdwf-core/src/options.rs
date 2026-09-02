@@ -14,7 +14,7 @@ pub const DEFAULT_MAX_TOTAL_UNCOMPRESSED_SIZE_BYTES: usize = 1024 * 1024 * 1024;
 pub const DEFAULT_MAX_COMPRESSION_RATIO: usize = 1_000;
 
 /// Default maximum XML resource size (16 MiB).
-pub const DEFAULT_MAX_XML_SIZE_BYTES: usize = 16 * 1024 * 1024;
+pub const DEFAULT_MAX_XML_SIZE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Default maximum element nesting depth for manifest and descriptor XML.
 pub const DEFAULT_MAX_XML_DEPTH: usize = 128;

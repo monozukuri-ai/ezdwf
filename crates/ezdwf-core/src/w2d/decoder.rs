@@ -220,7 +220,7 @@ impl<'a> Decoder<'a> {
         }
         let supported = match header_kind {
             "W2D" => major == "06",
-            "DWF" => major == "00" && matches!(minor, "36" | "42" | "55"),
+            "DWF" => major == "00" && matches!(minor, "34" | "36" | "42" | "55"),
             _ => false,
         };
         if !supported {

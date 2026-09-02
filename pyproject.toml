@@ -1,6 +1,6 @@
 [project]
 name = "ezdwf"
-version = "0.0.3"
+version = "0.0.4"
 description = "Native DWF 2D package inspector and parser for Python powered by Rust"
 readme = "README.md"
 license = "MIT"
