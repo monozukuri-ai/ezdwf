@@ -22,9 +22,19 @@ impl fmt::Display for DwfVersion {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DwfFormat {
-    LegacyDwf { version: DwfVersion },
-    DwfPackage { version: DwfVersion },
+    LegacyDwf {
+        version: DwfVersion,
+    },
+    DwfPackage {
+        version: DwfVersion,
+    },
     Dwfx,
+    /// A `(W2D V06.xx)` graphics stream that is not wrapped in a DWF 6
+    /// package, for example a `.w2d` resource extracted from a package and
+    /// renamed to `.dwf`. It is read like a legacy single-stream file.
+    W2dStream {
+        version: DwfVersion,
+    },
 }
 
 impl DwfFormat {
@@ -34,13 +44,16 @@ impl DwfFormat {
             Self::LegacyDwf { .. } => "legacy_dwf",
             Self::DwfPackage { .. } => "dwf_package",
             Self::Dwfx => "dwfx",
+            Self::W2dStream { .. } => "w2d_stream",
         }
     }
 
     #[must_use]
     pub const fn version(&self) -> Option<DwfVersion> {
         match self {
-            Self::LegacyDwf { version } | Self::DwfPackage { version } => Some(*version),
+            Self::LegacyDwf { version }
+            | Self::DwfPackage { version }
+            | Self::W2dStream { version } => Some(*version),
             Self::Dwfx => None,
         }
     }
@@ -49,7 +62,7 @@ impl DwfFormat {
     pub const fn package_prefix_len(&self) -> usize {
         match self {
             Self::DwfPackage { .. } => DWF_PACKAGE_HEADER_LEN,
-            Self::LegacyDwf { .. } | Self::Dwfx => 0,
+            Self::LegacyDwf { .. } | Self::Dwfx | Self::W2dStream { .. } => 0,
         }
     }
 }
@@ -60,6 +73,7 @@ impl fmt::Display for DwfFormat {
             Self::LegacyDwf { version } => write!(formatter, "legacy DWF {version}"),
             Self::DwfPackage { version } => write!(formatter, "DWF package {version}"),
             Self::Dwfx => formatter.write_str("DWFx OPC/XPS package"),
+            Self::W2dStream { version } => write!(formatter, "bare W2D stream {version}"),
         }
     }
 }
@@ -69,12 +83,17 @@ pub fn detect_format(data: &[u8], options: ParseOptions) -> Result<DwfFormat, Dw
     check_file_size(data, options)?;
 
     if data.starts_with(b"(DWF") {
-        let version = parse_dwf_header(data)?;
+        let version = parse_stream_header(data, b"(DWF V")?;
         return if version.major >= 6 {
             Ok(DwfFormat::DwfPackage { version })
         } else {
             Ok(DwfFormat::LegacyDwf { version })
         };
+    }
+
+    if data.starts_with(b"(W2D") {
+        let version = parse_stream_header(data, b"(W2D V")?;
+        return Ok(DwfFormat::W2dStream { version });
     }
 
     if data.starts_with(b"PK\x03\x04") || data.starts_with(b"PK\x05\x06") {
@@ -105,7 +124,7 @@ pub(crate) fn check_file_size(data: &[u8], options: ParseOptions) -> Result<(), 
     Ok(())
 }
 
-fn parse_dwf_header(data: &[u8]) -> Result<DwfVersion, DwfError> {
+fn parse_stream_header(data: &[u8], prefix: &[u8; 6]) -> Result<DwfVersion, DwfError> {
     if data.len() < DWF_PACKAGE_HEADER_LEN {
         return Err(DwfError::InputTooShort {
             needed: DWF_PACKAGE_HEADER_LEN,
@@ -113,10 +132,11 @@ fn parse_dwf_header(data: &[u8]) -> Result<DwfVersion, DwfError> {
         });
     }
     let header = &data[..DWF_PACKAGE_HEADER_LEN];
-    if &header[..6] != b"(DWF V" || header[8] != b'.' || header[11] != b')' {
+    if &header[..6] != prefix || header[8] != b'.' || header[11] != b')' {
         return Err(DwfError::InvalidDwfHeader {
             context: format!(
-                "expected (DWF V00.00), got {:?}",
+                "expected {}00.00), got {:?}",
+                String::from_utf8_lossy(prefix),
                 String::from_utf8_lossy(header)
             ),
         });
@@ -166,6 +186,19 @@ mod tests {
                 version: DwfVersion { major: 6, minor: 0 }
             }
         );
+    }
+
+    #[test]
+    fn detects_bare_w2d_streams() {
+        // 本番の実ファイル: パッケージから取り出した .w2d が .dwf として届いた
+        assert_eq!(
+            detect_format(b"(W2D V06.01)payload", ParseOptions::default()).unwrap(),
+            DwfFormat::W2dStream {
+                version: DwfVersion { major: 6, minor: 1 }
+            }
+        );
+        let error = detect_format(b"(W2D V6.01)payload", ParseOptions::default()).unwrap_err();
+        assert!(matches!(error, DwfError::InvalidDwfHeader { .. }));
     }
 
     #[test]

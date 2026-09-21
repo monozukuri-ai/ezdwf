@@ -195,7 +195,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         format_info = detect_format(args.input)
-        if format_info.is_legacy:
+        if format_info.is_single_stream:
             drawing = read(args.input)
             stream = drawing.legacy_stream
             assert stream is not None
@@ -209,7 +209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                 )
                 return 0
-            print(f"format: legacy_dwf {format_info.version or 'n/a'}")
+            print(f"format: {format_info.kind} {format_info.version or 'n/a'}")
             print(f"entities: {len(stream.entities)}")
             print(f"compressed blocks: {stream.compressed_blocks}")
             print(f"embedded fonts: {len(stream.embedded_fonts)}")

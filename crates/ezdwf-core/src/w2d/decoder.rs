@@ -220,7 +220,7 @@ impl<'a> Decoder<'a> {
         }
         let supported = match header_kind {
             "W2D" => major == "06",
-            "DWF" => major == "00" && matches!(minor, "34" | "36" | "42" | "55"),
+            "DWF" => major == "00" && matches!(minor, "25" | "34" | "36" | "42" | "55"),
             _ => false,
         };
         if !supported {
@@ -3244,6 +3244,23 @@ mod tests {
         assert_eq!(stream.version, "00.36");
         assert_eq!(stream.source_format, "legacy_dwf");
         assert_eq!(stream.entities.len(), 1);
+    }
+
+    #[test]
+    fn accepts_legacy_dwf_v025_header() {
+        // 本番の実ファイル(1997年頃の WHIP! 00.25、圧縮ブロック+線分3,178本)が同じ
+        // オペコードで診断なしに読めたため、許可リストに加えた
+        let data = b"(DWF V00.25)L 0,0 5,5\n(EndOfDWF)";
+        let stream = decode_w2d(data, "<legacy.dwf>", ParseOptions::default()).unwrap();
+        assert_eq!(stream.version, "00.25");
+        assert_eq!(stream.source_format, "legacy_dwf");
+        assert_eq!(stream.entities.len(), 1);
+
+        let unknown = b"(DWF V00.10)L 0,0 5,5\n(EndOfDWF)";
+        assert!(matches!(
+            decode_w2d(unknown, "<legacy.dwf>", ParseOptions::default()),
+            Err(DwfError::UnsupportedW2dVersion { .. })
+        ));
     }
 
     #[test]

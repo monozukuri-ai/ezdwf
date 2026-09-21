@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeAlias, cast
@@ -122,6 +122,16 @@ class DwfFormatInfo:
     @property
     def is_dwfx(self) -> bool:
         return self.kind == "dwfx"
+
+    @property
+    def is_w2d_stream(self) -> bool:
+        """A bare ``(W2D V06.xx)`` stream that is not wrapped in a DWF package."""
+        return self.kind == "w2d_stream"
+
+    @property
+    def is_single_stream(self) -> bool:
+        """Legacy DWF files and bare W2D streams are both one graphics stream."""
+        return self.kind in ("legacy_dwf", "w2d_stream")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1063,7 +1073,8 @@ def _w2d_stream(
 
 def _package_from_mapping(
     raw: Mapping[str, Any],
-    stream_entities_loader: Callable[[int, int], Iterable[Mapping[str, Any]]] | None = None,
+    stream_entities_loader: Callable[[int, int], Iterable[Mapping[str, Any]]]
+    | None = None,
 ) -> PackageInfo:
     manifest_value = cast(Mapping[str, Any], raw["manifest"])
     sections = []

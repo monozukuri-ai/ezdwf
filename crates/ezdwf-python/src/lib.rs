@@ -242,11 +242,12 @@ fn read_drawing_bytes(
             output.set_item("dwfx_package", py.None())?;
             output.set_item("drawing", normalized_drawing_to_python(py, &drawing)?)?;
         }
-        DwfFormat::LegacyDwf { .. } => {
+        DwfFormat::LegacyDwf { .. } | DwfFormat::W2dStream { .. } => {
+            let (resource, role, mime) = single_stream_identity(&format);
             let mut stream =
-                decode_w2d_core(data, "<legacy.dwf>", options).map_err(core_error_to_python)?;
-            stream.role = "legacy 2d streaming graphics".to_owned();
-            stream.mime = "application/x-dwf".to_owned();
+                decode_w2d_core(data, resource, options).map_err(core_error_to_python)?;
+            stream.role = role.to_owned();
+            stream.mime = mime.to_owned();
             let drawing = normalize_stream(&stream);
             output.set_item("package", py.None())?;
             output.set_item("legacy_stream", w2d_stream_to_python(py, &stream)?)?;
@@ -263,6 +264,21 @@ fn read_drawing_bytes(
         }
     }
     Ok(output.into_any().unbind())
+}
+
+/// Resource name, role and MIME type reported for files that consist of one
+/// graphics stream: legacy `(DWF V00.xx)` files and bare `(W2D V06.xx)` streams.
+fn single_stream_identity(format: &DwfFormat) -> (&'static str, &'static str, &'static str) {
+    match format {
+        DwfFormat::W2dStream { .. } => {
+            ("<stream.w2d>", "2d streaming graphics", "application/x-w2d")
+        }
+        _ => (
+            "<legacy.dwf>",
+            "legacy 2d streaming graphics",
+            "application/x-dwf",
+        ),
+    }
 }
 
 /// Rust-side holder for a parsed drawing, exposed so the Python layer can
@@ -485,11 +501,12 @@ fn read_drawing_handle(
                 drawing,
             })
         }
-        DwfFormat::LegacyDwf { .. } => {
+        DwfFormat::LegacyDwf { .. } | DwfFormat::W2dStream { .. } => {
+            let (resource, role, mime) = single_stream_identity(&format);
             let mut stream =
-                decode_w2d_core(data, "<legacy.dwf>", options).map_err(core_error_to_python)?;
-            stream.role = "legacy 2d streaming graphics".to_owned();
-            stream.mime = "application/x-dwf".to_owned();
+                decode_w2d_core(data, resource, options).map_err(core_error_to_python)?;
+            stream.role = role.to_owned();
+            stream.mime = mime.to_owned();
             let drawing = normalize_stream(&stream);
             Ok(DrawingHandle {
                 package: None,

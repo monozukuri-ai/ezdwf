@@ -53,8 +53,9 @@ def test_read_builds_normalized_sheet_and_keeps_raw_links(dwf_bytes: bytes) -> N
         make_dwf(),
         b"(DWF V00.55)(Line 0,0 5,5)(EndOfDWF)",
         make_dwfx(),
+        b"(W2D V06.01)(Line 0,0 5,5)(EndOfDWF)",
     ),
-    ids=("package", "legacy", "dwfx"),
+    ids=("package", "legacy", "dwfx", "w2d_stream"),
 )
 def test_streaming_read_matches_eager_mapping(data: bytes) -> None:
     eager_mapping = _core.read_drawing_bytes(data, *DEFAULT_LIMITS.as_args())
@@ -69,6 +70,27 @@ def test_streaming_read_matches_eager_mapping(data: bytes) -> None:
     )
 
 
+def test_reads_bare_w2d_stream_as_a_single_stream_drawing() -> None:
+    # 本番の実ファイル: DWFパッケージから取り出した (W2D V06.01) が .dwf として届き、
+    # "unrecognized DWF signature: 28 57 32 44 …" で読めなかった
+    data = b"(W2D V06.01)(Line 0,0 5,5)(Circle 10,20 5)(EndOfDWF)"
+    info = ezdwf.detect_format(data)
+    assert (info.kind, info.version, info.header_size) == ("w2d_stream", "06.01", 0)
+    assert info.is_w2d_stream and info.is_single_stream
+    assert not info.is_legacy and not info.is_package
+
+    drawing = ezdwf.read(data)
+    assert drawing.package is None and drawing.dwfx_package is None
+    stream = drawing.legacy_stream
+    assert stream is not None
+    assert stream.source_format == "w2d"
+    assert stream.mime == "application/x-w2d"
+    assert [entity.kind for entity in drawing.modelspace().entities] == [
+        "LINE",
+        "CIRCLE",
+    ]
+
+
 def test_drawing_handle_defers_package_entities(dwf_bytes: bytes) -> None:
     eager = _core.read_drawing_bytes(dwf_bytes, *DEFAULT_LIMITS.as_args())
     handle = _core.read_drawing_handle(dwf_bytes, *DEFAULT_LIMITS.as_args())
@@ -80,9 +102,7 @@ def test_drawing_handle_defers_package_entities(dwf_bytes: bytes) -> None:
     shell_stream = package_shell["manifest"]["sections"][0]["w2d_streams"][0]
     eager_stream = eager["package"]["manifest"]["sections"][0]["w2d_streams"][0]
     assert shell_stream["entities"] is None
-    assert (
-        handle.stream_entities(0, 0, 0, 1_000_000) == eager_stream["entities"]
-    )
+    assert handle.stream_entities(0, 0, 0, 1_000_000) == eager_stream["entities"]
     # 範囲取得: 分割しても連結すれば同一、末尾超えは空
     first = handle.stream_entities(0, 0, 0, 1)
     rest = handle.stream_entities(0, 0, 1, 1_000_000)

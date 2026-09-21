@@ -6,7 +6,7 @@ import ast
 import os
 import re
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeAlias, cast, overload
@@ -851,7 +851,7 @@ def _sheet_from_mapping(
 _HANDLE_CHUNK = 4096
 
 
-def _chunked_rows(fetch: "Callable[[int, int], list[Mapping[str, Any]]]"):
+def _chunked_rows(fetch: Callable[[int, int], list[Mapping[str, Any]]]):
     """範囲フェッチを空バッチまで繰り返すジェネレータ(dictは畳み込み後に解放)。"""
 
     def rows():

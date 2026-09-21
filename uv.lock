@@ -196,7 +196,7 @@ wheels = [
 
 [[package]]
 name = "ezdwf"
-version = "0.0.6"
+version = "0.0.7"
 source = { editable = "." }
 
 [package.optional-dependencies]
