@@ -214,6 +214,44 @@ def test_unknown_single_byte_w2d_opcode_fails_closed() -> None:
         ezdwf.inspect_package(data)
 
 
+def test_unknown_opcode_after_geometry_keeps_a_partial_sheet() -> None:
+    line = b"\x0c" + b"".join(
+        value.to_bytes(2, "little", signed=True) for value in (1, 2, 3, 4)
+    )
+    data = make_dwf(w2d=b"(W2D V06.00)" + line + b"\x01payload that is never decoded")
+
+    drawing = ezdwf.read(data)
+
+    assert drawing.stats()["entity_count"] == 1
+    truncated = [d for d in drawing.diagnostics if d.code == "W2D_STREAM_TRUNCATED"]
+    assert len(truncated) == 1
+    assert truncated[0].severity == "warning"
+    assert truncated[0].offset == 12 + len(line)
+    assert truncated[0].details["opcode"] == "0x01"
+    assert truncated[0].details["entities_kept"] == "1"
+
+
+def test_legacy_v050_binary_text_is_decoded() -> None:
+    text = (
+        b"\x18"
+        + (10).to_bytes(4, "little", signed=True)
+        + (20).to_bytes(4, "little", signed=True)
+        + b"'A1'\x01\x01"
+        + b"".join(
+            v.to_bytes(4, "little", signed=True) for v in (0, -3, 40, 0, 0, 5, -40, 0)
+        )
+    )
+    line = b"\x0c" + b"".join(
+        v.to_bytes(2, "little", signed=True) for v in (1, 1, 2, 2)
+    )
+
+    drawing = ezdwf.read(b"(DWF V00.50)" + text + line + b"(EndOfDWF)")
+
+    assert drawing.is_legacy
+    assert drawing.stats()["entity_count"] == 2
+    assert not drawing.diagnostics
+
+
 def test_invalid_internal_compression_fails_closed() -> None:
     w2d = b"(W2D V06.00){\x00\x00\x00\x00\x11\x00compressed"
     with pytest.raises(ezdwf.InvalidDwfError, match="invalid zlib compressed data"):

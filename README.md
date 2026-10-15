@@ -77,12 +77,21 @@ Run `ezdwf --help` or `ezdwf <command> --help` for all options.
 
 ## Supported input
 
-- Legacy 2D DWF/WHIP streams (`(DWF V00.25)`, `V00.34`, `V00.36`, `V00.42`, `V00.55`)
+- Legacy 2D DWF/WHIP streams (`(DWF V00.25)`, `V00.30`, `V00.34`, `V00.36`, `V00.42`,
+  `V00.50`, `V00.55`)
 - Bare `(W2D V06.xx)` graphics streams that are not wrapped in a DWF 6 package
   (for example a `.w2d` resource saved with a `.dwf` extension); they are read
   like a legacy single-stream file and report `kind == "w2d_stream"`
 - DWF 6 packages containing ePlot/W2D resources
 - DWFx packages containing OPC/OpenXPS fixed pages
+
+When a W2D resource contains a record the decoder cannot read (an unknown
+opcode or operands that do not parse), the entities decoded before it are kept,
+the rest of that resource is skipped, and a `W2D_STREAM_TRUNCATED` warning is
+added to `drawing.diagnostics` (details: `opcode`, `consumed_bytes`,
+`decoded_bytes`, `consumed_percent`, `entities_kept`, `error`). A resource that
+yields nothing drawable before the failure still raises the original error,
+and resource limits always fail closed.
 
 Common 2D geometry, layers, colors, line and fill styles, text, raster images,
 clips, opacity masks, gradients, Canvas groups, and VisualBrush resources are

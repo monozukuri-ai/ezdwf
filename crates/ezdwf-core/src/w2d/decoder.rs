@@ -9,6 +9,9 @@ use super::model::{
 use crate::{Diagnostic, DiagnosticSeverity, DwfError, ParseOptions};
 
 const W2D_HEADER_PREFIX: &str = "V";
+/// First W2D revision (decimal hundredths) whose binary text opcode carries the
+/// trailing reserved option vector after the bounds.
+const TEXT_RESERVED_OPTION_REVISION: u16 = 55;
 
 /// Decode a standalone W2D display-list resource.
 ///
@@ -147,20 +150,14 @@ impl<'a> Decoder<'a> {
             }
             self.bump_record_count()?;
             let start = self.position;
-            match self.peek().expect("position was checked") {
-                b'(' => {
-                    let end = self.scan_extended_ascii(start)?;
-                    self.position = end;
-                    self.decode_extended_ascii(start, end)?;
-                }
-                b'{' => {
-                    if !self.decode_extended_binary(start)? {
-                        break;
+            match self.decode_record(start) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(error) => {
+                    if !self.truncate_on_record_error(start, &error) {
+                        return Err(error);
                     }
-                }
-                opcode => {
-                    self.position += 1;
-                    self.decode_single_byte(opcode, start)?;
+                    break;
                 }
             }
         }
@@ -189,6 +186,92 @@ impl<'a> Decoder<'a> {
             entities: self.entities,
             diagnostics: self.diagnostics,
         })
+    }
+
+    /// Decode one record starting at `start`. Returns `Ok(false)` when the
+    /// stream cannot be continued (an unskippable extended binary record).
+    fn decode_record(&mut self, start: usize) -> Result<bool, DwfError> {
+        match self.peek().expect("position was checked") {
+            b'(' => {
+                let end = self.scan_extended_ascii(start)?;
+                self.position = end;
+                self.decode_extended_ascii(start, end)?;
+                Ok(true)
+            }
+            b'{' => self.decode_extended_binary(start),
+            opcode => {
+                self.position += 1;
+                self.decode_single_byte(opcode, start)?;
+                Ok(true)
+            }
+        }
+    }
+
+    /// Partial results: when a record cannot be decoded (an opcode this
+    /// decoder does not know, or operands that do not parse), keep every
+    /// entity decoded before it, stop this stream at the record start, and
+    /// report a `W2D_STREAM_TRUNCATED` warning. Resource limits are never
+    /// recovered from, and a stream that decoded nothing drawable still fails
+    /// with the original error so that unrelated input keeps failing closed.
+    fn truncate_on_record_error(&mut self, start: usize, error: &DwfError) -> bool {
+        let opcode = match error {
+            DwfError::UnsupportedW2dOpcode { opcode, .. } => Some(opcode.clone()),
+            DwfError::InvalidW2d { .. } => self.data.get(start).map(|byte| printable_opcode(*byte)),
+            _ => return false,
+        };
+        if self.entities.is_empty() {
+            return false;
+        }
+        let total = self.data.len().max(1);
+        let consumed_percent = (start as f64) * 100.0 / (total as f64);
+        let message = format!(
+            "W2D stream stopped at byte offset {start} of {total} decoded bytes ({consumed_percent:.1}%): {error}; kept {} entities decoded before it",
+            self.entities.len()
+        );
+        let source_offset = self.source_location(start).map(|location| location.offset);
+        self.complete = false;
+        self.push_diagnostic(
+            "W2D_STREAM_TRUNCATED",
+            DiagnosticSeverity::Warning,
+            message,
+            "kept the entities decoded before the record and skipped the rest of this W2D resource",
+            start,
+            opcode,
+        );
+        if let Some(diagnostic) = self.diagnostics.last_mut() {
+            diagnostic
+                .details
+                .insert("consumed_bytes".to_owned(), start.to_string());
+            diagnostic
+                .details
+                .insert("decoded_bytes".to_owned(), total.to_string());
+            diagnostic.details.insert(
+                "consumed_percent".to_owned(),
+                format!("{consumed_percent:.1}"),
+            );
+            diagnostic
+                .details
+                .insert("entities_kept".to_owned(), self.entities.len().to_string());
+            diagnostic
+                .details
+                .insert("error".to_owned(), error.to_string());
+            if let Some(offset) = source_offset {
+                diagnostic
+                    .details
+                    .insert("source_offset".to_owned(), offset.to_string());
+            }
+        }
+        self.position = self.data.len();
+        true
+    }
+
+    /// Decimal W2D revision (00.50 -> 50, 06.00 -> 600); unknown is treated as
+    /// the newest layout.
+    fn revision(&self) -> u16 {
+        self.version
+            .as_deref()
+            .and_then(decimal_revision)
+            .unwrap_or(u16::MAX)
     }
 
     fn parse_header(&mut self, raw: &[u8], offset: usize) -> Result<(), DwfError> {
@@ -220,7 +303,9 @@ impl<'a> Decoder<'a> {
         }
         let supported = match header_kind {
             "W2D" => major == "06",
-            "DWF" => major == "00" && matches!(minor, "25" | "34" | "36" | "42" | "55"),
+            "DWF" => {
+                major == "00" && matches!(minor, "25" | "30" | "34" | "36" | "42" | "50" | "55")
+            }
             _ => false,
         };
         if !supported {
@@ -2050,7 +2135,12 @@ impl<'a> Decoder<'a> {
         for point in &mut bounds {
             *point = self.read_relative_point_i32()?;
         }
-        self.skip_count_vector(start)?;
+        // The trailing reserved option vector is absent before W2D 00.55:
+        // AutoCAD LT 2002 (00.50) and 00.42 streams go straight to the next
+        // opcode after the four bounds points.
+        if self.revision() >= TEXT_RESERVED_OPTION_REVISION {
+            self.skip_count_vector(start)?;
+        }
         self.emit(
             W2dGeometry::Text {
                 position,
@@ -2083,14 +2173,10 @@ impl<'a> Decoder<'a> {
         start: usize,
         polytriangle: bool,
     ) -> Result<(), DwfError> {
-        let declared = self.read_count(start)?;
-        let point_count = if polytriangle {
-            declared
-                .checked_add(2)
-                .ok_or_else(|| self.error_at(start, "Gouraud vertex count overflow"))?
-        } else {
-            declared
-        };
+        // The binary count is the number of vertices actually stored (AutoCAD
+        // writes `07 03` followed by three colored vertices), not the triangle
+        // count + 2 described for the ASCII form.
+        let point_count = self.read_count(start)?;
         self.check_entity_points(point_count, start)?;
         let mut points = Vec::with_capacity(point_count);
         for _ in 0..point_count {
@@ -3675,5 +3761,163 @@ mod tests {
             mutated[index] ^= 0xFF;
             let _ = decode_w2d(&mutated, "mutated-compression.w2d", ParseOptions::default());
         }
+    }
+
+    fn binary_text(data: &mut Vec<u8>, reserved: bool) {
+        data.push(0x18);
+        data.extend_from_slice(&10_i32.to_le_bytes());
+        data.extend_from_slice(&20_i32.to_le_bytes());
+        data.extend_from_slice(b"'A1'");
+        // overscore and underscore option vectors: count 1 = no positions
+        data.extend_from_slice(&[1, 1]);
+        for value in [0_i32, -3, 40, 0, 0, 5, -40, 0] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        if reserved {
+            data.push(1);
+        }
+    }
+
+    #[test]
+    fn accepts_legacy_dwf_v030_and_v050_headers() {
+        for version in ["00.30", "00.50"] {
+            let data = format!("(DWF V{version})L 0,0 5,5\n(EndOfDWF)");
+            let stream =
+                decode_w2d(data.as_bytes(), "<legacy.dwf>", ParseOptions::default()).unwrap();
+            assert_eq!(stream.version, version);
+            assert_eq!(stream.source_format, "legacy_dwf");
+            assert_eq!(stream.entities.len(), 1);
+            assert!(stream.complete);
+        }
+    }
+
+    #[test]
+    fn legacy_binary_text_has_no_reserved_option_vector() {
+        // AutoCAD LT 2002 writes (DWF V00.50) text as position, string,
+        // overscore, underscore and bounds, then the next opcode directly.
+        for version in ["00.42", "00.50"] {
+            let mut data = format!("(DWF V{version})").into_bytes();
+            binary_text(&mut data, false);
+            data.push(0x0C);
+            for value in [1_i16, 1, 2, 2] {
+                data.extend_from_slice(&value.to_le_bytes());
+            }
+            data.extend_from_slice(b"(EndOfDWF)");
+            let stream = decode_w2d(&data, "<legacy.dwf>", ParseOptions::default()).unwrap();
+            assert!(stream.complete, "{version}");
+            assert_eq!(stream.entities.len(), 2, "{version}");
+            assert!(matches!(
+                &stream.entities[0].geometry,
+                W2dGeometry::Text { text, position: W2dPoint { x: 10, y: 20 }, bounds: Some(_) }
+                    if text == "A1"
+            ));
+            assert!(matches!(
+                stream.entities[1].geometry,
+                W2dGeometry::Line { .. }
+            ));
+        }
+
+        // W2D 06.00 keeps the reserved vector.
+        let mut data = b"(W2D V06.00)".to_vec();
+        binary_text(&mut data, true);
+        data.push(0x0C);
+        for value in [1_i16, 1, 2, 2] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(b"(EndOfDWF)");
+        let stream = decode_w2d(&data, "text.w2d", ParseOptions::default()).unwrap();
+        assert!(stream.complete);
+        assert_eq!(stream.entities.len(), 2);
+    }
+
+    #[test]
+    fn binary_gouraud_count_is_the_vertex_count() {
+        let mut data = b"(W2D V06.00)".to_vec();
+        data.push(b'F');
+        data.push(0x07);
+        data.push(3);
+        for (dx, dy) in [(1_i16, 1_i16), (2, 0), (0, 2)] {
+            data.extend_from_slice(&dx.to_le_bytes());
+            data.extend_from_slice(&dy.to_le_bytes());
+            data.extend_from_slice(&[212, 212, 212, 255]);
+        }
+        data.push(b'f');
+        data.push(0x11);
+        data.push(2);
+        for (dx, dy) in [(0_i16, -1_i16), (5, 0)] {
+            data.extend_from_slice(&dx.to_le_bytes());
+            data.extend_from_slice(&dy.to_le_bytes());
+            data.extend_from_slice(&[1, 2, 3, 255]);
+        }
+        data.extend_from_slice(b"(EndOfDWF)");
+        let stream = decode_w2d(&data, "gouraud.w2d", ParseOptions::default()).unwrap();
+        assert!(stream.complete);
+        assert_eq!(stream.entities.len(), 2);
+        assert!(matches!(
+            &stream.entities[0].geometry,
+            W2dGeometry::GouraudPolytriangle { points } if points.len() == 3
+        ));
+        assert!(matches!(
+            &stream.entities[1].geometry,
+            W2dGeometry::GouraudPolyline { points } if points.len() == 2
+        ));
+    }
+
+    #[test]
+    fn unknown_opcode_after_geometry_truncates_with_a_warning() {
+        let mut data = b"(W2D V06.00)".to_vec();
+        data.push(0x0C);
+        for value in [1_i16, 2, 3, 4] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        let stop = data.len();
+        data.push(0x01);
+        data.extend_from_slice(b"garbage that is never decoded");
+        let stream = decode_w2d(&data, "partial.w2d", ParseOptions::default()).unwrap();
+        assert!(!stream.complete);
+        assert_eq!(stream.entities.len(), 1);
+        let diagnostic = stream
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "W2D_STREAM_TRUNCATED")
+            .expect("truncation is reported");
+        assert_eq!(diagnostic.severity, DiagnosticSeverity::Warning);
+        assert_eq!(diagnostic.offset, Some(stop));
+        assert_eq!(diagnostic.resource.as_deref(), Some("partial.w2d"));
+        assert_eq!(
+            diagnostic.details.get("opcode").map(String::as_str),
+            Some("0x01")
+        );
+        assert_eq!(
+            diagnostic.details.get("consumed_bytes").map(String::as_str),
+            Some(stop.to_string().as_str())
+        );
+        assert_eq!(
+            diagnostic.details.get("entities_kept").map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn unknown_opcode_with_nothing_decoded_still_fails_closed() {
+        let data = b"(W2D V06.00)\x01payload";
+        assert!(matches!(
+            decode_w2d(data, "nothing.w2d", ParseOptions::default()),
+            Err(DwfError::UnsupportedW2dOpcode { offset: 12, .. })
+        ));
+    }
+
+    #[test]
+    fn resource_limits_are_not_turned_into_partial_results() {
+        let line: Vec<u8> = std::iter::once(0x0C_u8)
+            .chain([1_i16, 2, 3, 4].into_iter().flat_map(i16::to_le_bytes))
+            .collect();
+        let mut data = b"(W2D V06.00)".to_vec();
+        data.extend(line.repeat(3));
+        let options = ParseOptions {
+            max_w2d_records: 2,
+            ..ParseOptions::default()
+        };
+        assert!(decode_w2d(&data, "limits.w2d", options).is_err());
     }
 }

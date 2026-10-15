@@ -259,10 +259,12 @@
         "version": "00.30"
       },
       "parser_expectation": {
-        "status": "recognized-unsupported",
+        "status": "supported",
         "kind": "legacy_dwf",
         "version": "00.30",
-        "error_contains": "W2D version 00.30"
+        "sheet_count": 1,
+        "entity_count": 5247,
+        "diagnostics": 0
       },
       "redistribution": {
         "status": "source-terms-restrict-redistribution",
@@ -287,10 +289,12 @@
         "version": "00.50"
       },
       "parser_expectation": {
-        "status": "recognized-unsupported",
+        "status": "supported",
         "kind": "legacy_dwf",
         "version": "00.50",
-        "error_contains": "W2D version 00.50"
+        "sheet_count": 1,
+        "entity_count": 8901,
+        "diagnostics": 0
       },
       "redistribution": {
         "status": "source-terms-restrict-redistribution",
