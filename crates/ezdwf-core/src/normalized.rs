@@ -4,6 +4,8 @@
 //! applies DWF ePlot or XPS transforms and keeps source indexes so callers can
 //! move between normalized and raw entities without reparsing or guessing.
 
+use std::sync::Arc;
+
 use serde::Serialize;
 
 use crate::{
@@ -479,8 +481,9 @@ pub struct NormalizedEntity {
     pub section_index: usize,
     pub stream_index: usize,
     pub entity_index: usize,
-    pub resource_href: String,
-    pub resource_role: String,
+    /// Shared with every other entity of the same stream.
+    pub resource_href: Arc<str>,
+    pub resource_role: Arc<str>,
     pub is_markup: bool,
     pub geometry: NormalizedGeometry,
     /// Effective ancestor-to-visual clip chain retained for query compatibility.
@@ -495,7 +498,8 @@ pub struct NormalizedEntity {
     pub compositing_groups: Vec<NormalizedCompositingGroup>,
     /// Positioned packaged-font outlines for XPS Glyphs, when available.
     pub glyph_outline: Option<Vec<NormalizedPathFigure>>,
-    pub style: NormalizedStyle,
+    /// Shared between consecutive W2D entities drawn with the same rendition.
+    pub style: Arc<NormalizedStyle>,
     pub source: W2dSourceSpan,
 }
 
@@ -531,12 +535,28 @@ pub fn normalize_package(package: &DwfPackage) -> Result<NormalizedDrawing, DwfE
         let Some(page) = &section.page else {
             continue;
         };
-        let mut entities = Vec::new();
-        let mut markup_entities = Vec::new();
+        // Exact capacities: a stream with millions of entities must not pay for
+        // the doubling overshoot of an unsized push loop.
+        let (plain_count, markup_count) =
+            section
+                .w2d_streams
+                .iter()
+                .fold((0, 0), |(plain, markup), stream| {
+                    if is_markup_role(&stream.role) {
+                        (plain, markup + stream.entities.len())
+                    } else {
+                        (plain + stream.entities.len(), markup)
+                    }
+                });
+        let mut entities = Vec::with_capacity(plain_count);
+        let mut markup_entities = Vec::with_capacity(markup_count);
         for (stream_index, stream) in section.w2d_streams.iter().enumerate() {
-            let is_markup = stream.role.to_ascii_lowercase().contains("markup");
+            let is_markup = is_markup_role(&stream.role);
             let transform =
                 Affine2D::from_resource(stream.transform.as_deref(), &section.name, &stream.href)?;
+            let resource_href: Arc<str> = Arc::from(stream.href.as_str());
+            let resource_role: Arc<str> = Arc::from(stream.role.as_str());
+            let mut style_cache = StyleCache::default();
             for (entity_index, entity) in stream.entities.iter().enumerate() {
                 let normalized = normalize_entity(
                     entity,
@@ -545,10 +565,11 @@ pub fn normalize_package(package: &DwfPackage) -> Result<NormalizedDrawing, DwfE
                         section_index,
                         stream_index,
                         entity_index,
-                        resource_href: &stream.href,
-                        resource_role: &stream.role,
+                        resource_href: &resource_href,
+                        resource_role: &resource_role,
                         is_markup,
                     },
+                    &mut style_cache,
                 );
                 if is_markup {
                     markup_entities.push(normalized);
@@ -645,25 +666,25 @@ pub fn normalize_dwfx(package: &DwfxPackage) -> NormalizedDrawing {
 #[must_use]
 pub fn normalize_stream(stream: &W2dStream) -> NormalizedDrawing {
     let transform = Affine2D::IDENTITY;
-    let entities = stream
-        .entities
-        .iter()
-        .enumerate()
-        .map(|(entity_index, entity)| {
-            normalize_entity(
-                entity,
-                NormalizeEntityContext {
-                    transform,
-                    section_index: 0,
-                    stream_index: 0,
-                    entity_index,
-                    resource_href: &stream.href,
-                    resource_role: &stream.role,
-                    is_markup: false,
-                },
-            )
-        })
-        .collect::<Vec<_>>();
+    let resource_href: Arc<str> = Arc::from(stream.href.as_str());
+    let resource_role: Arc<str> = Arc::from(stream.role.as_str());
+    let mut style_cache = StyleCache::default();
+    let mut entities = Vec::with_capacity(stream.entities.len());
+    for (entity_index, entity) in stream.entities.iter().enumerate() {
+        entities.push(normalize_entity(
+            entity,
+            NormalizeEntityContext {
+                transform,
+                section_index: 0,
+                stream_index: 0,
+                entity_index,
+                resource_href: &resource_href,
+                resource_role: &resource_role,
+                is_markup: false,
+            },
+            &mut style_cache,
+        ));
+    }
     let content_bounds = geometry_bounds(&entities);
     NormalizedDrawing {
         sheets: vec![NormalizedSheet {
@@ -686,17 +707,46 @@ pub fn normalize_stream(stream: &W2dStream) -> NormalizedDrawing {
     }
 }
 
+fn is_markup_role(role: &str) -> bool {
+    role.to_ascii_lowercase().contains("markup")
+}
+
 struct NormalizeEntityContext<'a> {
     transform: Affine2D,
     section_index: usize,
     stream_index: usize,
     entity_index: usize,
-    resource_href: &'a str,
-    resource_role: &'a str,
+    resource_href: &'a Arc<str>,
+    resource_role: &'a Arc<str>,
     is_markup: bool,
 }
 
-fn normalize_entity(entity: &W2dEntity, context: NormalizeEntityContext<'_>) -> NormalizedEntity {
+/// Last (rendition, style) pair of one stream. Consecutive W2D entities share
+/// their rendition snapshot, so the normalized style is computed once per run
+/// of identical state instead of once per entity.
+#[derive(Default)]
+struct StyleCache {
+    last: Option<(Arc<W2dRendition>, Arc<NormalizedStyle>)>,
+}
+
+impl StyleCache {
+    fn style_for(&mut self, entity: &W2dEntity, transform: Affine2D) -> Arc<NormalizedStyle> {
+        if let Some((rendition, style)) = &self.last {
+            if Arc::ptr_eq(rendition, &entity.rendition) {
+                return Arc::clone(style);
+            }
+        }
+        let style = Arc::new(normalize_style(&entity.rendition, transform));
+        self.last = Some((Arc::clone(&entity.rendition), Arc::clone(&style)));
+        style
+    }
+}
+
+fn normalize_entity(
+    entity: &W2dEntity,
+    context: NormalizeEntityContext<'_>,
+    style_cache: &mut StyleCache,
+) -> NormalizedEntity {
     let NormalizeEntityContext {
         transform,
         section_index,
@@ -840,8 +890,8 @@ fn normalize_entity(entity: &W2dEntity, context: NormalizeEntityContext<'_>) -> 
         section_index,
         stream_index,
         entity_index,
-        resource_href: resource_href.to_owned(),
-        resource_role: resource_role.to_owned(),
+        resource_href: Arc::clone(resource_href),
+        resource_role: Arc::clone(resource_role),
         is_markup,
         geometry,
         clips: Vec::new(),
@@ -850,7 +900,7 @@ fn normalize_entity(entity: &W2dEntity, context: NormalizeEntityContext<'_>) -> 
         local_opacity_masks: Vec::new(),
         compositing_groups: Vec::new(),
         glyph_outline: None,
-        style: normalize_style(&entity.rendition, transform),
+        style: style_cache.style_for(entity, transform),
         source: entity.source.clone(),
     }
 }
@@ -1027,8 +1077,8 @@ fn normalize_xps_entity(
         section_index: page_index,
         stream_index: document_index,
         entity_index,
-        resource_href: resource_href.to_owned(),
-        resource_role: "xps fixed page".to_owned(),
+        resource_href: Arc::from(resource_href),
+        resource_role: Arc::from("xps fixed page"),
         is_markup: false,
         geometry,
         clips,
@@ -1037,11 +1087,11 @@ fn normalize_xps_entity(
         local_opacity_masks,
         compositing_groups,
         glyph_outline,
-        style,
+        style: Arc::new(style),
         source: W2dSourceSpan {
             offset: entity.source.offset,
             length: entity.source.length,
-            opcode: entity.source.element.clone(),
+            opcode: Arc::from(entity.source.element.as_str()),
             decoded_offset: None,
             decoded_length: None,
             compression_depth: 0,
@@ -1694,7 +1744,7 @@ mod tests {
                 start_angle: 0,
                 end_angle: 65_536,
             },
-            rendition: W2dRendition {
+            rendition: Arc::new(W2dRendition {
                 color: Some([1, 2, 3, 255]),
                 color_index: None,
                 layer: Some(W2dLayer {
@@ -1706,28 +1756,41 @@ mod tests {
                     ..W2dLineStyle::default()
                 },
                 ..W2dRendition::default()
-            },
+            }),
             source: W2dSourceSpan {
                 offset: 12,
                 length: 9,
-                opcode: "r".to_owned(),
+                opcode: Arc::from("r"),
                 decoded_offset: None,
                 decoded_length: None,
                 compression_depth: 0,
             },
         };
-        let normalized = normalize_entity(
-            &entity,
-            NormalizeEntityContext {
-                transform: transform(),
-                section_index: 2,
-                stream_index: 3,
-                entity_index: 4,
-                resource_href: "main.w2d",
-                resource_role: "graphics2d",
-                is_markup: false,
-            },
-        );
+        let resource_href: Arc<str> = Arc::from("main.w2d");
+        let resource_role: Arc<str> = Arc::from("graphics2d");
+        let mut style_cache = StyleCache::default();
+        let context = || NormalizeEntityContext {
+            transform: transform(),
+            section_index: 2,
+            stream_index: 3,
+            entity_index: 4,
+            resource_href: &resource_href,
+            resource_role: &resource_role,
+            is_markup: false,
+        };
+        let normalized = normalize_entity(&entity, context(), &mut style_cache);
+        // Same rendition snapshot -> the normalized style is shared; a new
+        // snapshot with the same content -> recomputed (equal, not shared).
+        let again = normalize_entity(&entity, context(), &mut style_cache);
+        assert!(Arc::ptr_eq(&normalized.style, &again.style));
+        let resnapshotted = W2dEntity {
+            rendition: Arc::new((*entity.rendition).clone()),
+            ..entity.clone()
+        };
+        let separate = normalize_entity(&resnapshotted, context(), &mut style_cache);
+        assert!(!Arc::ptr_eq(&normalized.style, &separate.style));
+        assert_eq!(normalized.style, separate.style);
+        assert!(Arc::ptr_eq(&normalized.resource_href, &again.resource_href));
         assert_eq!(normalized.geometry.kind(), "CIRCLE");
         assert_eq!(normalized.section_index, 2);
         assert_eq!(normalized.stream_index, 3);

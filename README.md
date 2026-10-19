@@ -132,6 +132,11 @@ See [the object model documentation](docs/object-model.ja.md) for details.
   ImageBrush, and VisualBrush paints and applies the first path in a clip chain.
 - Unsupported or ambiguous source semantics are reported through diagnostics
   instead of being silently approximated.
+- `ParseLimits.max_w2d_entities` (default 500,000 per W2D resource) is a soft
+  limit: the drawables decoded before it are kept, the rest of that resource is
+  skipped, and a `W2D_ENTITY_LIMIT_TRUNCATED` warning is reported. Raise it for
+  very large plots when enough memory is available; the other limits still fail
+  closed.
 
 ## License
 

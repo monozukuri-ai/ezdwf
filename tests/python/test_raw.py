@@ -162,6 +162,38 @@ def test_w2d_total_points_nesting_and_truncation_limits() -> None:
         ezdwf.decode_w2d(b"(W2D V06.00)\x0c\x00")
 
 
+def test_w2d_entity_limit_is_soft_and_reported() -> None:
+    three_lines = b"(W2D V06.00)(Line 0,0 1,1)(Line 2,2 3,3)(Line 4,4 5,5)"
+    limits = ezdwf.ParseLimits(max_w2d_entities=2)
+    stream = ezdwf.decode_w2d(three_lines, limits=limits)
+    assert len(stream.entities) == 2
+    assert stream.complete is False
+    truncated = [
+        d for d in stream.diagnostics if d.code == "W2D_ENTITY_LIMIT_TRUNCATED"
+    ]
+    assert len(truncated) == 1
+    assert truncated[0].severity == "warning"
+    assert truncated[0].offset == 40
+    assert truncated[0].details["entities_kept"] == "2"
+    assert truncated[0].details["limit"] == "2"
+    assert truncated[0].details["opcode"] == "(Line"
+
+    # Entities drawn with one rendition share the same frozen objects on the
+    # Python side as well (raw rendition and normalized style).
+    assert stream.entities[0].rendition is stream.entities[1].rendition
+
+    drawing = ezdwf.read(three_lines, limits=limits)
+    assert drawing.stats()["entity_count"] == 2
+    assert [d.code for d in drawing.diagnostics] == ["W2D_ENTITY_LIMIT_TRUNCATED"]
+    first, second = drawing.sheets[0].entities
+    assert first.style is second.style
+    assert first.raw.rendition is second.raw.rendition
+
+    assert len(ezdwf.decode_w2d(three_lines).entities) == 3
+    assert ezdwf.ParseLimits().max_w2d_entities == 500_000
+    assert len(ezdwf.ParseLimits().as_args()) == 17
+
+
 def test_parse_limits_reject_bool_negative_and_wrong_type() -> None:
     with pytest.raises(TypeError):
         ezdwf.ParseLimits(max_file_size=True)  # type: ignore[arg-type]

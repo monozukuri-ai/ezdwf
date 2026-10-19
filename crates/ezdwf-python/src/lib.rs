@@ -1,6 +1,7 @@
 //! PyO3 bindings for `ezdwf-core` package and legacy-stream parsing.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use ezdwf_core::{
     decode_w2d as decode_w2d_core, detect_format, inspect_dwfx,
@@ -62,6 +63,7 @@ fn detect_format_bytes(
     max_w2d_records: usize,
     max_w2d_points_per_entity: usize,
     max_w2d_total_points: usize,
+    max_w2d_entities: usize,
     max_w2d_string_size: usize,
     max_w2d_nesting_depth: usize,
     max_w2d_decompressed_size: usize,
@@ -82,6 +84,7 @@ fn detect_format_bytes(
             max_w2d_records,
             max_w2d_points_per_entity,
             max_w2d_total_points,
+            max_w2d_entities,
             max_w2d_string_size,
             max_w2d_nesting_depth,
             max_w2d_decompressed_size,
@@ -109,6 +112,7 @@ fn inspect_package_bytes(
     max_w2d_records: usize,
     max_w2d_points_per_entity: usize,
     max_w2d_total_points: usize,
+    max_w2d_entities: usize,
     max_w2d_string_size: usize,
     max_w2d_nesting_depth: usize,
     max_w2d_decompressed_size: usize,
@@ -129,6 +133,7 @@ fn inspect_package_bytes(
             max_w2d_records,
             max_w2d_points_per_entity,
             max_w2d_total_points,
+            max_w2d_entities,
             max_w2d_string_size,
             max_w2d_nesting_depth,
             max_w2d_decompressed_size,
@@ -156,6 +161,7 @@ fn inspect_dwfx_bytes(
     max_w2d_records: usize,
     max_w2d_points_per_entity: usize,
     max_w2d_total_points: usize,
+    max_w2d_entities: usize,
     max_w2d_string_size: usize,
     max_w2d_nesting_depth: usize,
     max_w2d_decompressed_size: usize,
@@ -175,6 +181,7 @@ fn inspect_dwfx_bytes(
         max_w2d_records,
         max_w2d_points_per_entity,
         max_w2d_total_points,
+        max_w2d_entities,
         max_w2d_string_size,
         max_w2d_nesting_depth,
         max_w2d_decompressed_size,
@@ -206,6 +213,7 @@ fn read_drawing_bytes(
     max_w2d_records: usize,
     max_w2d_points_per_entity: usize,
     max_w2d_total_points: usize,
+    max_w2d_entities: usize,
     max_w2d_string_size: usize,
     max_w2d_nesting_depth: usize,
     max_w2d_decompressed_size: usize,
@@ -224,6 +232,7 @@ fn read_drawing_bytes(
         max_w2d_records,
         max_w2d_points_per_entity,
         max_w2d_total_points,
+        max_w2d_entities,
         max_w2d_string_size,
         max_w2d_nesting_depth,
         max_w2d_decompressed_size,
@@ -423,11 +432,14 @@ impl DrawingHandle {
                 section.w2d_streams.len()
             ))
         })?;
-        let entities = PyList::empty(py);
-        let end = start.saturating_add(count).min(stream.entities.len());
-        for entity in &stream.entities[start.min(stream.entities.len())..end] {
-            entities.append(w2d_entity_to_python(py, entity)?)?;
-        }
+        let entities = convert_run_slice(
+            py,
+            &stream.entities,
+            start,
+            start.saturating_add(count),
+            rendition_shared,
+            w2d_entity_to_python,
+        )?;
         Ok(entities.into_any().unbind())
     }
 
@@ -464,6 +476,7 @@ fn read_drawing_handle(
     max_w2d_records: usize,
     max_w2d_points_per_entity: usize,
     max_w2d_total_points: usize,
+    max_w2d_entities: usize,
     max_w2d_string_size: usize,
     max_w2d_nesting_depth: usize,
     max_w2d_decompressed_size: usize,
@@ -482,6 +495,7 @@ fn read_drawing_handle(
         max_w2d_records,
         max_w2d_points_per_entity,
         max_w2d_total_points,
+        max_w2d_entities,
         max_w2d_string_size,
         max_w2d_nesting_depth,
         max_w2d_decompressed_size,
@@ -544,6 +558,7 @@ fn decode_w2d_bytes(
     max_w2d_records: usize,
     max_w2d_points_per_entity: usize,
     max_w2d_total_points: usize,
+    max_w2d_entities: usize,
     max_w2d_string_size: usize,
     max_w2d_nesting_depth: usize,
     max_w2d_decompressed_size: usize,
@@ -571,6 +586,7 @@ fn decode_w2d_bytes(
             max_w2d_records,
             max_w2d_points_per_entity,
             max_w2d_total_points,
+            max_w2d_entities,
             max_w2d_string_size,
             max_w2d_nesting_depth,
             max_w2d_decompressed_size,
@@ -595,6 +611,7 @@ fn parse_options(
     max_w2d_records: usize,
     max_w2d_points_per_entity: usize,
     max_w2d_total_points: usize,
+    max_w2d_entities: usize,
     max_w2d_string_size: usize,
     max_w2d_nesting_depth: usize,
     max_w2d_decompressed_size: usize,
@@ -613,6 +630,7 @@ fn parse_options(
         max_w2d_records,
         max_w2d_points_per_entity,
         max_w2d_total_points,
+        max_w2d_entities,
         max_w2d_string_size,
         max_w2d_nesting_depth,
         max_w2d_decompressed_size,
@@ -643,17 +661,66 @@ fn normalized_drawing_to_python<'py>(
     Ok(value)
 }
 
+/// Deterministic identity of a shared snapshot (rendition or style): the
+/// index, within `items`, of the first item of the run that shares it. Chunked
+/// and one-shot conversions agree on it, and two parses of the same bytes give
+/// the same ids, unlike raw pointer values.
+fn run_start_before<T>(items: &[T], index: usize, same: &impl Fn(&T, &T) -> bool) -> usize {
+    let mut start = index;
+    while start > 0 && same(&items[start - 1], &items[index]) {
+        start -= 1;
+    }
+    start
+}
+
+fn rendition_shared(left: &W2dEntity, right: &W2dEntity) -> bool {
+    Arc::ptr_eq(&left.rendition, &right.rendition)
+}
+
+fn style_shared(left: &NormalizedEntity, right: &NormalizedEntity) -> bool {
+    Arc::ptr_eq(&left.style, &right.style)
+}
+
+/// Convert `items[start..end]` (clamped) to dicts, passing each item the index
+/// where its run of shared snapshots starts.
+fn convert_run_slice<'py, T>(
+    py: Python<'py>,
+    items: &[T],
+    start: usize,
+    end: usize,
+    same: impl Fn(&T, &T) -> bool,
+    convert: impl Fn(Python<'py>, &T, usize) -> PyResult<Bound<'py, PyDict>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let list = PyList::empty(py);
+    let start = start.min(items.len());
+    let end = end.min(items.len()).max(start);
+    if start == end {
+        return Ok(list);
+    }
+    let mut run_start = run_start_before(items, start, &same);
+    for index in start..end {
+        if index > start && !same(&items[index - 1], &items[index]) {
+            run_start = index;
+        }
+        list.append(convert(py, &items[index], run_start)?)?;
+    }
+    Ok(list)
+}
+
 fn entity_slice_to_python(
     py: Python<'_>,
     entities: &[NormalizedEntity],
     start: usize,
     count: usize,
 ) -> PyResult<Py<PyAny>> {
-    let list = PyList::empty(py);
-    let end = start.saturating_add(count).min(entities.len());
-    for entity in &entities[start.min(entities.len())..end] {
-        list.append(normalized_entity_to_python(py, entity)?)?;
-    }
+    let list = convert_run_slice(
+        py,
+        entities,
+        start,
+        start.saturating_add(count),
+        style_shared,
+        normalized_entity_to_python,
+    )?;
     Ok(list.into_any().unbind())
 }
 
@@ -680,15 +747,23 @@ fn normalized_sheet_to_python_impl<'py>(
     sheet_value.set_item("background_color", sheet.background_color.map(Vec::from))?;
     sheet_value.set_item("content_bounds", sheet.content_bounds.map(Vec::from))?;
     if include_entities {
-        let entities = PyList::empty(py);
-        for entity in &sheet.entities {
-            entities.append(normalized_entity_to_python(py, entity)?)?;
-        }
+        let entities = convert_run_slice(
+            py,
+            &sheet.entities,
+            0,
+            usize::MAX,
+            style_shared,
+            normalized_entity_to_python,
+        )?;
         sheet_value.set_item("entities", entities)?;
-        let markup_entities = PyList::empty(py);
-        for entity in &sheet.markup_entities {
-            markup_entities.append(normalized_entity_to_python(py, entity)?)?;
-        }
+        let markup_entities = convert_run_slice(
+            py,
+            &sheet.markup_entities,
+            0,
+            usize::MAX,
+            style_shared,
+            normalized_entity_to_python,
+        )?;
         sheet_value.set_item("markup_entities", markup_entities)?;
     } else {
         sheet_value.set_item("entities", py.None())?;
@@ -700,14 +775,15 @@ fn normalized_sheet_to_python_impl<'py>(
 fn normalized_entity_to_python<'py>(
     py: Python<'py>,
     entity: &NormalizedEntity,
+    style_id: usize,
 ) -> PyResult<Bound<'py, PyDict>> {
     let value = PyDict::new(py);
     value.set_item("kind", entity.geometry.kind())?;
     value.set_item("section_index", entity.section_index)?;
     value.set_item("stream_index", entity.stream_index)?;
     value.set_item("entity_index", entity.entity_index)?;
-    value.set_item("resource_href", &entity.resource_href)?;
-    value.set_item("resource_role", &entity.resource_role)?;
+    value.set_item("resource_href", &*entity.resource_href)?;
+    value.set_item("resource_role", &*entity.resource_role)?;
     value.set_item("is_markup", entity.is_markup)?;
     value.set_item("points", Vec::<(f64, f64)>::new())?;
     value.set_item("center", py.None())?;
@@ -982,10 +1058,12 @@ fn normalized_entity_to_python<'py>(
             .transpose()?,
     )?;
     value.set_item("style", normalized_style_to_python(py, &entity.style)?)?;
+    // Identity of the shared style (index where its run starts; see `rendition_id`).
+    value.set_item("style_id", style_id)?;
     let source = PyDict::new(py);
     source.set_item("offset", entity.source.offset)?;
     source.set_item("length", entity.source.length)?;
-    source.set_item("opcode", &entity.source.opcode)?;
+    source.set_item("opcode", &*entity.source.opcode)?;
     source.set_item("decoded_offset", entity.source.decoded_offset)?;
     source.set_item("decoded_length", entity.source.decoded_length)?;
     source.set_item("compression_depth", entity.source.compression_depth)?;
@@ -1142,10 +1220,14 @@ fn normalized_brush_to_python<'py>(
         }
         NormalizedBrush::Visual { brush } => {
             output.set_item("kind", "visual")?;
-            let entities = PyList::empty(py);
-            for entity in &brush.entities {
-                entities.append(normalized_entity_to_python(py, entity)?)?;
-            }
+            let entities = convert_run_slice(
+                py,
+                &brush.entities,
+                0,
+                usize::MAX,
+                style_shared,
+                normalized_entity_to_python,
+            )?;
             output.set_item("entities", entities)?;
             output.set_item("viewbox", brush.viewbox.to_vec())?;
             output.set_item("viewport", brush.viewport.to_vec())?;
@@ -1988,10 +2070,14 @@ fn w2d_stream_to_python_impl<'py>(
     value.set_item("block_refs", block_refs)?;
 
     if include_entities {
-        let entities = PyList::empty(py);
-        for entity in &stream.entities {
-            entities.append(w2d_entity_to_python(py, entity)?)?;
-        }
+        let entities = convert_run_slice(
+            py,
+            &stream.entities,
+            0,
+            usize::MAX,
+            rendition_shared,
+            w2d_entity_to_python,
+        )?;
         value.set_item("entities", entities)?;
     } else {
         value.set_item("entities", py.None())?;
@@ -2012,7 +2098,11 @@ fn w2d_units_to_python<'py>(py: Python<'py>, units: &W2dUnits) -> PyResult<Bound
     Ok(value)
 }
 
-fn w2d_entity_to_python<'py>(py: Python<'py>, entity: &W2dEntity) -> PyResult<Bound<'py, PyDict>> {
+fn w2d_entity_to_python<'py>(
+    py: Python<'py>,
+    entity: &W2dEntity,
+    rendition_id: usize,
+) -> PyResult<Bound<'py, PyDict>> {
     let value = PyDict::new(py);
     value.set_item("kind", entity.geometry.kind())?;
     value.set_item("points", Vec::<(i64, i64)>::new())?;
@@ -2141,6 +2231,10 @@ fn w2d_entity_to_python<'py>(py: Python<'py>, entity: &W2dEntity) -> PyResult<Bo
         }
     }
     value.set_item("rendition", w2d_rendition_to_python(py, &entity.rendition)?)?;
+    // Identity of the shared rendition snapshot (index where its run starts):
+    // entities with the same id carry identical renditions, so the Python side
+    // shares one object for them.
+    value.set_item("rendition_id", rendition_id)?;
     value.set_item("source", source_span_to_python(py, &entity.source)?)?;
     Ok(value)
 }
@@ -2152,7 +2246,7 @@ fn source_span_to_python<'py>(
     let value = PyDict::new(py);
     value.set_item("offset", source.offset)?;
     value.set_item("length", source.length)?;
-    value.set_item("opcode", &source.opcode)?;
+    value.set_item("opcode", &*source.opcode)?;
     value.set_item("decoded_offset", source.decoded_offset)?;
     value.set_item("decoded_length", source.decoded_length)?;
     value.set_item("compression_depth", source.compression_depth)?;
@@ -2350,6 +2444,10 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(
         "DEFAULT_MAX_W2D_TOTAL_POINTS",
         ezdwf_core::DEFAULT_MAX_W2D_TOTAL_POINTS,
+    )?;
+    module.add(
+        "DEFAULT_MAX_W2D_ENTITIES",
+        ezdwf_core::DEFAULT_MAX_W2D_ENTITIES,
     )?;
     module.add(
         "DEFAULT_MAX_W2D_STRING_SIZE_BYTES",

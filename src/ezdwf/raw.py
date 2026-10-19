@@ -28,6 +28,9 @@ class ParseLimits:
     max_w2d_records: int = _core.DEFAULT_MAX_W2D_RECORDS
     max_w2d_points_per_entity: int = _core.DEFAULT_MAX_W2D_POINTS_PER_ENTITY
     max_w2d_total_points: int = _core.DEFAULT_MAX_W2D_TOTAL_POINTS
+    # Soft limit: drawables past it are skipped with a W2D_ENTITY_LIMIT_TRUNCATED
+    # warning instead of failing the resource.
+    max_w2d_entities: int = _core.DEFAULT_MAX_W2D_ENTITIES
     max_w2d_string_size: int = _core.DEFAULT_MAX_W2D_STRING_SIZE_BYTES
     max_w2d_nesting_depth: int = _core.DEFAULT_MAX_W2D_NESTING_DEPTH
     max_w2d_decompressed_size: int = _core.DEFAULT_MAX_W2D_DECOMPRESSED_SIZE_BYTES
@@ -54,6 +57,7 @@ class ParseLimits:
             "max_w2d_records": self.max_w2d_records,
             "max_w2d_points_per_entity": self.max_w2d_points_per_entity,
             "max_w2d_total_points": self.max_w2d_total_points,
+            "max_w2d_entities": self.max_w2d_entities,
             "max_w2d_string_size": self.max_w2d_string_size,
             "max_w2d_nesting_depth": self.max_w2d_nesting_depth,
             "max_w2d_decompressed_size": self.max_w2d_decompressed_size,
@@ -65,6 +69,7 @@ class ParseLimits:
     def as_args(
         self,
     ) -> tuple[
+        int,
         int,
         int,
         int,
@@ -93,6 +98,7 @@ class ParseLimits:
             self.max_w2d_records,
             self.max_w2d_points_per_entity,
             self.max_w2d_total_points,
+            self.max_w2d_entities,
             self.max_w2d_string_size,
             self.max_w2d_nesting_depth,
             self.max_w2d_decompressed_size,
@@ -942,8 +948,22 @@ def _w2d_rendition(value: Mapping[str, Any]) -> W2dRendition:
     )
 
 
-def _w2d_entity(value: Mapping[str, Any]) -> W2dEntity:
+def _w2d_entity(
+    value: Mapping[str, Any],
+    rendition_cache: dict[int, W2dRendition] | None = None,
+) -> W2dEntity:
     source = cast(Mapping[str, Any], value["source"])
+    # Consecutive entities share one rendition snapshot in the core; reuse the
+    # frozen dataclass for the same `rendition_id` instead of rebuilding it.
+    rendition_value = cast(Mapping[str, Any], value["rendition"])
+    rendition_id = cast(int | None, value.get("rendition_id"))
+    rendition: W2dRendition | None = None
+    if rendition_cache is not None and rendition_id is not None:
+        rendition = rendition_cache.get(rendition_id)
+    if rendition is None:
+        rendition = _w2d_rendition(rendition_value)
+        if rendition_cache is not None and rendition_id is not None:
+            rendition_cache[rendition_id] = rendition
     center = value.get("center")
     bounds = cast(list[object] | None, value.get("bounds"))
     return W2dEntity(
@@ -988,7 +1008,7 @@ def _w2d_entity(value: Mapping[str, Any]) -> W2dEntity:
             if (image := cast(Mapping[str, Any] | None, value.get("image"))) is not None
             else None
         ),
-        rendition=_w2d_rendition(cast(Mapping[str, Any], value["rendition"])),
+        rendition=rendition,
         source=_w2d_source(source),
     )
 
@@ -997,6 +1017,7 @@ def _w2d_stream(
     value: Mapping[str, Any],
     entities_override: Iterable[Mapping[str, Any]] | None = None,
 ) -> W2dStream:
+    rendition_cache: dict[int, W2dRendition] = {}
     return W2dStream(
         href=str(value["href"]),
         role=str(value["role"]),
@@ -1052,7 +1073,7 @@ def _w2d_stream(
             for block_ref in cast(list[Mapping[str, Any]], value.get("block_refs", []))
         ),
         entities=tuple(
-            _w2d_entity(entity)
+            _w2d_entity(entity, rendition_cache)
             for entity in (
                 entities_override
                 if entities_override is not None

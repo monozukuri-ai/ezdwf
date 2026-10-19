@@ -28,6 +28,15 @@ pub const DEFAULT_MAX_W2D_POINTS_PER_ENTITY: usize = 1_000_000;
 /// Default maximum aggregate number of decoded logical points in one W2D resource.
 pub const DEFAULT_MAX_W2D_TOTAL_POINTS: usize = 20_000_000;
 
+/// Default maximum number of drawable entities kept from one W2D resource.
+///
+/// Unlike the other W2D limits this one is soft: the decoder keeps the
+/// entities decoded before it, reports a `W2D_ENTITY_LIMIT_TRUNCATED` warning,
+/// and skips the rest of that resource instead of failing. The default keeps a
+/// complete read (core structures plus the Python object model) near 1.3 GB
+/// for a worst-case stream; raise it when more memory is available.
+pub const DEFAULT_MAX_W2D_ENTITIES: usize = 500_000;
+
 /// Default maximum byte length of one W2D string operand (1 MiB).
 pub const DEFAULT_MAX_W2D_STRING_SIZE_BYTES: usize = 1024 * 1024;
 
@@ -60,6 +69,7 @@ pub struct ParseOptions {
     pub max_w2d_records: usize,
     pub max_w2d_points_per_entity: usize,
     pub max_w2d_total_points: usize,
+    pub max_w2d_entities: usize,
     pub max_w2d_string_size: usize,
     pub max_w2d_nesting_depth: usize,
     pub max_w2d_decompressed_size: usize,
@@ -81,6 +91,7 @@ impl Default for ParseOptions {
             max_w2d_records: DEFAULT_MAX_W2D_RECORDS,
             max_w2d_points_per_entity: DEFAULT_MAX_W2D_POINTS_PER_ENTITY,
             max_w2d_total_points: DEFAULT_MAX_W2D_TOTAL_POINTS,
+            max_w2d_entities: DEFAULT_MAX_W2D_ENTITIES,
             max_w2d_string_size: DEFAULT_MAX_W2D_STRING_SIZE_BYTES,
             max_w2d_nesting_depth: DEFAULT_MAX_W2D_NESTING_DEPTH,
             max_w2d_decompressed_size: DEFAULT_MAX_W2D_DECOMPRESSED_SIZE_BYTES,

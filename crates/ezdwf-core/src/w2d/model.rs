@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::Serialize;
 
 use crate::Diagnostic;
@@ -55,7 +57,8 @@ pub struct W2dSourceSpan {
     pub offset: usize,
     /// Physical source length, or the record length for uncompressed data.
     pub length: usize,
-    pub opcode: String,
+    /// Opcode label, shared by every span of the same opcode in a stream.
+    pub opcode: Arc<str>,
     /// Offset within the expanded wrapper, when compression was involved.
     pub decoded_offset: Option<usize>,
     /// Record length in expanded bytes, when compression was involved.
@@ -218,7 +221,9 @@ impl W2dGeometry {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct W2dEntity {
     pub geometry: W2dGeometry,
-    pub rendition: W2dRendition,
+    /// Rendition snapshot. Consecutive entities drawn with the same state share
+    /// one allocation, so a stream of millions of entities stays compact.
+    pub rendition: Arc<W2dRendition>,
     pub source: W2dSourceSpan,
 }
 

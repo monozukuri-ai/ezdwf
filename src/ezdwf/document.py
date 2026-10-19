@@ -820,14 +820,29 @@ def _sheet_from_mapping(
     else:
         assert legacy_stream is not None
         raw_section = legacy_stream
+    # One cache per list: `style_id` is the run start within that list.
+    style_cache: dict[int, Style] = {}
+    markup_style_cache: dict[int, Style] = {}
     entities = tuple(
-        _entity_from_mapping(entity_value, package, legacy_stream, dwfx_package)
+        _entity_from_mapping(
+            entity_value,
+            package,
+            legacy_stream,
+            dwfx_package,
+            style_cache=style_cache,
+        )
         for entity_value in cast(
             list[Mapping[str, Any]], sheet_value.get("entities", [])
         )
     )
     markup_entities = tuple(
-        _entity_from_mapping(entity_value, package, legacy_stream, dwfx_package)
+        _entity_from_mapping(
+            entity_value,
+            package,
+            legacy_stream,
+            dwfx_package,
+            style_cache=markup_style_cache,
+        )
         for entity_value in cast(
             list[Mapping[str, Any]], sheet_value.get("markup_entities", [])
         )
@@ -970,6 +985,7 @@ def _entity_from_mapping(
     dwfx_package: DwfxPackageInfo | None,
     *,
     embedded: bool = False,
+    style_cache: dict[int, Style] | None = None,
 ) -> Entity:
     section_index = int(value["section_index"])
     stream_index = int(value["stream_index"])
@@ -988,6 +1004,16 @@ def _entity_from_mapping(
         assert legacy_stream is not None
         raw = legacy_stream.entities[entity_index]
     style_value = cast(Mapping[str, Any], value["style"])
+    # Entities drawn with one rendition share a style in the core; reuse the
+    # frozen Style for the same `style_id` instead of rebuilding it per entity.
+    style_id = cast(int | None, value.get("style_id"))
+    style: Style | None = None
+    if style_cache is not None and style_id is not None:
+        style = style_cache.get(style_id)
+    if style is None:
+        style = _style_from_mapping(style_value)
+        if style_cache is not None and style_id is not None:
+            style_cache[style_id] = style
     source_value = cast(Mapping[str, Any], value["source"])
     image_value = cast(Mapping[str, Any] | None, value.get("image"))
     return Entity(
@@ -1088,7 +1114,7 @@ def _entity_from_mapping(
             if value.get("glyph_outline") is not None
             else None
         ),
-        style=_style_from_mapping(style_value),
+        style=style,
         source=W2dSourceSpan(
             offset=int(source_value["offset"]),
             length=int(source_value["length"]),

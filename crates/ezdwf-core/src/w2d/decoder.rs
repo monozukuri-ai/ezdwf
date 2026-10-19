@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use super::ascii::{parse_record, Node};
 use super::compression::{expand_lz, expand_zlib};
@@ -54,6 +55,12 @@ struct Decoder<'a> {
     embedded_fonts: Vec<W2dEmbeddedFont>,
     block_refs: Vec<W2dBlockRef>,
     entities: Vec<W2dEntity>,
+    /// Rendition snapshot shared by consecutive entities until the state changes.
+    shared_rendition: Option<Arc<W2dRendition>>,
+    /// Interned opcode labels so every source span of one opcode shares an allocation.
+    opcode_names: BTreeMap<String, Arc<str>>,
+    /// Set once `max_w2d_entities` drawables were kept; later drawables are skipped.
+    entity_limit_reached: bool,
     diagnostics: Vec<Diagnostic>,
     version: Option<String>,
     source_format: Option<String>,
@@ -122,6 +129,9 @@ impl<'a> Decoder<'a> {
             embedded_fonts: Vec::new(),
             block_refs: Vec::new(),
             entities: Vec::new(),
+            shared_rendition: None,
+            opcode_names: BTreeMap::new(),
+            entity_limit_reached: false,
             diagnostics: Vec::new(),
             version: None,
             source_format: None,
@@ -159,6 +169,9 @@ impl<'a> Decoder<'a> {
                     }
                     break;
                 }
+            }
+            if self.entity_limit_reached {
+                break;
             }
         }
 
@@ -588,7 +601,7 @@ impl<'a> Decoder<'a> {
         self.block_refs.push(W2dBlockRef {
             format: format.to_string(),
             payload,
-            source: self.source_span(start, payload_end + 1 - start, &format!("0x{opcode:04X}")),
+            source: self.source_span(start, payload_end + 1 - start, format!("0x{opcode:04X}")),
         });
         Ok(())
     }
@@ -1587,7 +1600,7 @@ impl<'a> Decoder<'a> {
             typeface_name,
             logfont_name,
             data,
-            source: self.source_span(start, raw.len(), &format!("({name}")),
+            source: self.source_span(start, raw.len(), format!("({name}")),
         });
         Ok(())
     }
@@ -2287,23 +2300,102 @@ impl<'a> Decoder<'a> {
         length: usize,
         opcode: &str,
     ) -> Result<(), DwfError> {
+        if self.entities.len() >= self.options.max_w2d_entities {
+            self.truncate_on_entity_limit(offset, opcode);
+            return Ok(());
+        }
         let points = geometry_point_count(&geometry);
         self.check_entity_points(points, offset)?;
         self.account_points(points)?;
+        let rendition = self.shared_rendition();
+        let opcode = self.intern_opcode(opcode);
+        let source = self.source_span(offset, length, opcode);
         self.entities.push(W2dEntity {
             geometry,
-            rendition: self.rendition.clone(),
-            source: self.source_span(offset, length, opcode),
+            rendition,
+            source,
         });
         Ok(())
     }
 
-    fn source_span(&self, offset: usize, length: usize, opcode: &str) -> W2dSourceSpan {
+    /// The current rendition as a shared snapshot. Consecutive drawables
+    /// usually share one state, so the previous snapshot is reused until an
+    /// attribute record changes it.
+    fn shared_rendition(&mut self) -> Arc<W2dRendition> {
+        if let Some(shared) = &self.shared_rendition {
+            if **shared == self.rendition {
+                return Arc::clone(shared);
+            }
+        }
+        let shared = Arc::new(self.rendition.clone());
+        self.shared_rendition = Some(Arc::clone(&shared));
+        shared
+    }
+
+    fn intern_opcode(&mut self, opcode: &str) -> Arc<str> {
+        if let Some(interned) = self.opcode_names.get(opcode) {
+            return Arc::clone(interned);
+        }
+        let interned: Arc<str> = Arc::from(opcode);
+        self.opcode_names
+            .insert(opcode.to_owned(), Arc::clone(&interned));
+        interned
+    }
+
+    /// Soft `max_w2d_entities` limit: keep the drawables decoded so far, report
+    /// once, and let the record loop stop at the next record boundary. Unlike
+    /// the hard limits this never fails the stream; the diagnostic carries the
+    /// same bookkeeping as `W2D_STREAM_TRUNCATED` plus the limit itself.
+    fn truncate_on_entity_limit(&mut self, start: usize, opcode: &str) {
+        if self.entity_limit_reached {
+            return;
+        }
+        self.entity_limit_reached = true;
+        self.complete = false;
+        let limit = self.options.max_w2d_entities;
+        let total = self.data.len().max(1);
+        let consumed_percent = (start as f64) * 100.0 / (total as f64);
+        let message = format!(
+            "W2D stream stopped at byte offset {start} of {total} decoded bytes ({consumed_percent:.1}%): kept the first {} drawable entities (max_w2d_entities = {limit}) and skipped the rest of this W2D resource",
+            self.entities.len()
+        );
+        let source_offset = self.source_location(start).map(|location| location.offset);
+        self.push_diagnostic(
+            "W2D_ENTITY_LIMIT_TRUNCATED",
+            DiagnosticSeverity::Warning,
+            message,
+            "kept the entities decoded before the limit and skipped the rest of this W2D resource",
+            start,
+            Some(opcode.to_owned()),
+        );
+        if let Some(diagnostic) = self.diagnostics.last_mut() {
+            let details = &mut diagnostic.details;
+            details.insert("consumed_bytes".to_owned(), start.to_string());
+            details.insert("decoded_bytes".to_owned(), total.to_string());
+            details.insert(
+                "consumed_percent".to_owned(),
+                format!("{consumed_percent:.1}"),
+            );
+            details.insert("entities_kept".to_owned(), self.entities.len().to_string());
+            details.insert("limit".to_owned(), limit.to_string());
+            if let Some(offset) = source_offset {
+                details.insert("source_offset".to_owned(), offset.to_string());
+            }
+        }
+    }
+
+    fn source_span(
+        &self,
+        offset: usize,
+        length: usize,
+        opcode: impl Into<Arc<str>>,
+    ) -> W2dSourceSpan {
+        let opcode: Arc<str> = opcode.into();
         let Some(location) = self.source_location(offset) else {
             return W2dSourceSpan {
                 offset,
                 length,
-                opcode: opcode.to_owned(),
+                opcode,
                 decoded_offset: None,
                 decoded_length: None,
                 compression_depth: 0,
@@ -2313,7 +2405,7 @@ impl<'a> Decoder<'a> {
             W2dSourceSpan {
                 offset: location.offset,
                 length,
-                opcode: opcode.to_owned(),
+                opcode,
                 decoded_offset: None,
                 decoded_length: None,
                 compression_depth: 0,
@@ -2322,7 +2414,7 @@ impl<'a> Decoder<'a> {
             W2dSourceSpan {
                 offset: location.offset,
                 length: location.length,
-                opcode: opcode.to_owned(),
+                opcode,
                 decoded_offset: location.decoded_offset,
                 decoded_length: Some(length),
                 compression_depth: location.compression_depth,
@@ -3541,6 +3633,56 @@ mod tests {
             error,
             DwfError::UnsupportedW2dOpcode { offset: 12, .. }
         ));
+    }
+
+    #[test]
+    fn entity_limit_keeps_prefix_and_reports_truncation() {
+        let three_lines = b"(W2D V06.00)(Line 0,0 1,1)(Line 2,2 3,3)(Line 4,4 5,5)";
+        let stream = decode_w2d(
+            three_lines,
+            "limits.w2d",
+            ParseOptions {
+                max_w2d_entities: 2,
+                ..ParseOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(stream.entities.len(), 2);
+        assert!(!stream.complete);
+        let truncated: Vec<_> = stream
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "W2D_ENTITY_LIMIT_TRUNCATED")
+            .collect();
+        assert_eq!(truncated.len(), 1);
+        assert_eq!(truncated[0].severity, DiagnosticSeverity::Warning);
+        assert_eq!(truncated[0].offset, Some(40));
+        assert_eq!(truncated[0].details["entities_kept"], "2");
+        assert_eq!(truncated[0].details["limit"], "2");
+        assert_eq!(truncated[0].details["opcode"], "(Line");
+
+        let unlimited = decode_w2d(three_lines, "limits.w2d", ParseOptions::default()).unwrap();
+        assert_eq!(unlimited.entities.len(), 3);
+        assert!(unlimited.complete);
+        assert!(unlimited.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn consecutive_entities_share_rendition_and_opcode_allocations() {
+        let stream = decode_w2d(
+            b"(W2D V06.00)(Line 0,0 1,1)(Line 2,2 3,3)(Color 1,2,3,255)(Line 4,4 5,5)",
+            "shared.w2d",
+            ParseOptions::default(),
+        )
+        .unwrap();
+        let [first, second, third] = stream.entities.as_slice() else {
+            panic!("expected three entities");
+        };
+        assert!(Arc::ptr_eq(&first.rendition, &second.rendition));
+        assert!(!Arc::ptr_eq(&second.rendition, &third.rendition));
+        assert_eq!(third.rendition.color, Some([1, 2, 3, 255]));
+        assert!(Arc::ptr_eq(&first.source.opcode, &third.source.opcode));
+        assert_eq!(&*first.source.opcode, "(Line");
     }
 
     #[test]

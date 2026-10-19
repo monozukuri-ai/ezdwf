@@ -10,6 +10,7 @@ DEFAULT_MAX_XML_DEPTH: Final[int]
 DEFAULT_MAX_W2D_RECORDS: Final[int]
 DEFAULT_MAX_W2D_POINTS_PER_ENTITY: Final[int]
 DEFAULT_MAX_W2D_TOTAL_POINTS: Final[int]
+DEFAULT_MAX_W2D_ENTITIES: Final[int]
 DEFAULT_MAX_W2D_STRING_SIZE_BYTES: Final[int]
 DEFAULT_MAX_W2D_NESTING_DEPTH: Final[int]
 DEFAULT_MAX_W2D_DECOMPRESSED_SIZE_BYTES: Final[int]
@@ -46,6 +47,7 @@ def detect_format_bytes(
     max_w2d_records: int,
     max_w2d_points_per_entity: int,
     max_w2d_total_points: int,
+    max_w2d_entities: int,
     max_w2d_string_size: int,
     max_w2d_nesting_depth: int,
     max_w2d_decompressed_size: int,
@@ -65,6 +67,7 @@ def inspect_package_bytes(
     max_w2d_records: int,
     max_w2d_points_per_entity: int,
     max_w2d_total_points: int,
+    max_w2d_entities: int,
     max_w2d_string_size: int,
     max_w2d_nesting_depth: int,
     max_w2d_decompressed_size: int,
@@ -84,6 +87,7 @@ def inspect_dwfx_bytes(
     max_w2d_records: int,
     max_w2d_points_per_entity: int,
     max_w2d_total_points: int,
+    max_w2d_entities: int,
     max_w2d_string_size: int,
     max_w2d_nesting_depth: int,
     max_w2d_decompressed_size: int,
@@ -103,6 +107,7 @@ def read_drawing_bytes(
     max_w2d_records: int,
     max_w2d_points_per_entity: int,
     max_w2d_total_points: int,
+    max_w2d_entities: int,
     max_w2d_string_size: int,
     max_w2d_nesting_depth: int,
     max_w2d_decompressed_size: int,
@@ -122,6 +127,7 @@ def read_drawing_handle(
     max_w2d_records: int,
     max_w2d_points_per_entity: int,
     max_w2d_total_points: int,
+    max_w2d_entities: int,
     max_w2d_string_size: int,
     max_w2d_nesting_depth: int,
     max_w2d_decompressed_size: int,
@@ -142,6 +148,7 @@ def decode_w2d_bytes(
     max_w2d_records: int,
     max_w2d_points_per_entity: int,
     max_w2d_total_points: int,
+    max_w2d_entities: int,
     max_w2d_string_size: int,
     max_w2d_nesting_depth: int,
     max_w2d_decompressed_size: int,
