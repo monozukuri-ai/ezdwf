@@ -128,9 +128,7 @@ pub(crate) fn parse_manifest(
     }
 
     Ok(DwfManifest {
-        version: version.ok_or_else(|| DwfError::InvalidManifest {
-            context: "Manifest version attribute is missing".to_owned(),
-        })?,
+        version: version.unwrap_or_default(),
         object_id,
         properties,
         interfaces,
@@ -159,7 +157,9 @@ fn handle_element(
                 });
             }
             *root_seen = true;
-            *version = Some(required(values, "version", document, "Manifest")?);
+            // Some publishers leave the version out. It only labels the package, so it must
+            // not reject the sheets; inspect_package falls back to the package header.
+            *version = values.get("version").cloned();
             *object_id = values.get("objectId").cloned();
         }
         "Interface" if parent == Some("Interfaces") => {
@@ -254,6 +254,19 @@ mod tests {
             manifest.sections[0].resources[0].normalized_href,
             "sheet/descriptor.xml"
         );
+    }
+
+    #[test]
+    fn manifest_without_version_is_accepted() {
+        // Written by some publishers: the root has only namespace declarations.
+        let xml = br#"<dwf:Manifest xmlns:dwf="DWF-Manifest:6.0">
+          <dwf:Sections><dwf:Section type="com.autodesk.dwf.ePlot" name="sheet">
+            <dwf:Toc><dwf:Resource dwf:role="descriptor" dwf:mime="text/xml" dwf:href="sheet/descriptor.xml"/></dwf:Toc>
+          </dwf:Section></dwf:Sections>
+        </dwf:Manifest>"#;
+        let manifest = parse_manifest(xml, "manifest.xml", ParseOptions::default()).unwrap();
+        assert_eq!(manifest.version, "");
+        assert_eq!(manifest.sections.len(), 1);
     }
 
     #[test]

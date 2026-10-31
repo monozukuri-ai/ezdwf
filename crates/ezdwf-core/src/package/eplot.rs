@@ -96,8 +96,10 @@ fn handle_element(
                 });
             }
             *page = Some(EPlotPage {
-                version: required(values, "version", document, "Page")?,
-                name: required(values, "name", document, "Page")?,
+                // Publishers may leave these out (sheet sets: 10 of 96 pages without a name).
+                // They only label the page; inspect_package falls back to the section title.
+                version: values.get("version").cloned().unwrap_or_default(),
+                name: values.get("name").cloned().unwrap_or_default(),
                 object_id: values.get("objectId").cloned(),
                 plot_order: parse_optional(values, "plotOrder", document, "Page")?,
                 color: parse_optional_color(values, "color", document, "Page")?,
@@ -281,6 +283,18 @@ fn parse_optional_color(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_without_name_and_version_is_accepted() {
+        // Sheet sets leave them out on some pages; the graphics are still there.
+        let xml = br#"<ePlot:Page xmlns:ePlot="DWF-ePlot:1.2" plotOrder="1">
+          <ePlot:Resources><ePlot:GraphicResource role="2d streaming graphics" mime="application/x-w2d" href="sheet/main.w2d"/></ePlot:Resources>
+        </ePlot:Page>"#;
+        let page = parse_eplot(xml, "sheet/descriptor.xml", "sheet", ParseOptions::default())
+            .unwrap();
+        assert_eq!((page.name.as_str(), page.version.as_str()), ("", ""));
+        assert_eq!(page.resources.len(), 1);
+    }
 
     #[test]
     fn parses_page_paper_properties_and_resources() {

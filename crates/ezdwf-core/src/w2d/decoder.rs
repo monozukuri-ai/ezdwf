@@ -317,7 +317,8 @@ impl<'a> Decoder<'a> {
         let supported = match header_kind {
             "W2D" => major == "06",
             "DWF" => {
-                major == "00" && matches!(minor, "25" | "30" | "34" | "36" | "42" | "50" | "55")
+                major == "00"
+                    && matches!(minor, "17" | "25" | "30" | "34" | "36" | "42" | "50" | "55")
             }
             _ => false,
         };
@@ -3439,6 +3440,16 @@ mod tests {
             decode_w2d(unknown, "<legacy.dwf>", ParseOptions::default()),
             Err(DwfError::UnsupportedW2dVersion { .. })
         ));
+    }
+
+    #[test]
+    fn accepts_legacy_dwf_v017_header() {
+        // 本番の実ファイル(WHIP! 00.17、圧縮ブロック+線分・折れ線・塗り)が同じオペコードで読めた
+        let data = b"(DWF V00.17)L 0,0 5,5\n(EndOfDWF)";
+        let stream = decode_w2d(data, "<legacy.dwf>", ParseOptions::default()).unwrap();
+        assert_eq!(stream.version, "00.17");
+        assert_eq!(stream.source_format, "legacy_dwf");
+        assert_eq!(stream.entities.len(), 1);
     }
 
     #[test]

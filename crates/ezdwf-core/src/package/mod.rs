@@ -23,6 +23,11 @@ pub fn inspect_package(data: &[u8], options: ParseOptions) -> Result<DwfPackage,
     let archive = PackageArchive::open(data, prefix_len, options)?;
     let manifest_xml = archive.read_entry("manifest.xml", options.max_xml_size)?;
     let mut manifest = parse_manifest(&manifest_xml, "manifest.xml", options)?;
+    if manifest.version.is_empty() {
+        if let Some(version) = format.version() {
+            manifest.version = version.to_string();
+        }
+    }
     let mut diagnostics = Vec::new();
 
     for section in &mut manifest.sections {
@@ -51,12 +56,15 @@ pub fn inspect_package(data: &[u8], options: ParseOptions) -> Result<DwfPackage,
             })?;
         let descriptor_xml =
             archive.read_entry(&descriptor.normalized_href, options.max_xml_size)?;
-        let page = parse_eplot(
+        let mut page = parse_eplot(
             &descriptor_xml,
             &descriptor.normalized_href,
             &section.name,
             options,
         )?;
+        if page.name.is_empty() {
+            page.name = section.title.clone().unwrap_or_else(|| section.name.clone());
+        }
         for resource in &page.resources {
             if !archive.contains(&resource.normalized_href) {
                 return Err(DwfError::MissingResource {
