@@ -290,8 +290,13 @@ mod tests {
         let xml = br#"<ePlot:Page xmlns:ePlot="DWF-ePlot:1.2" plotOrder="1">
           <ePlot:Resources><ePlot:GraphicResource role="2d streaming graphics" mime="application/x-w2d" href="sheet/main.w2d"/></ePlot:Resources>
         </ePlot:Page>"#;
-        let page = parse_eplot(xml, "sheet/descriptor.xml", "sheet", ParseOptions::default())
-            .unwrap();
+        let page = parse_eplot(
+            xml,
+            "sheet/descriptor.xml",
+            "sheet",
+            ParseOptions::default(),
+        )
+        .unwrap();
         assert_eq!((page.name.as_str(), page.version.as_str()), ("", ""));
         assert_eq!(page.resources.len(), 1);
     }

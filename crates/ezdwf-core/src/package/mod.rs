@@ -63,7 +63,10 @@ pub fn inspect_package(data: &[u8], options: ParseOptions) -> Result<DwfPackage,
             options,
         )?;
         if page.name.is_empty() {
-            page.name = section.title.clone().unwrap_or_else(|| section.name.clone());
+            page.name = section
+                .title
+                .clone()
+                .unwrap_or_else(|| section.name.clone());
         }
         for resource in &page.resources {
             if !archive.contains(&resource.normalized_href) {
