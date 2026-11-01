@@ -436,6 +436,19 @@ fn release_freed_heap() {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 fn release_freed_heap() {}
 
+impl Drop for DrawingHandle {
+    /// The package, streams and remaining normalized data are the largest
+    /// allocations of a reader's lifetime; return them to the OS right away
+    /// instead of leaving them as retained free heap (0.4 GB after a plot set).
+    fn drop(&mut self) {
+        self.package = None;
+        self.legacy_stream = None;
+        self.dwfx_package = None;
+        self.drawing = NormalizedDrawing::default();
+        release_freed_heap();
+    }
+}
+
 #[pymethods]
 impl DrawingHandle {
     /// Which container format was parsed: "package" | "legacy" | "dwfx".
