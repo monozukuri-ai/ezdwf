@@ -746,6 +746,7 @@ fn normalized_sheet_to_python_impl<'py>(
     sheet_value.set_item("clip", sheet.clip.map(Vec::from))?;
     sheet_value.set_item("background_color", sheet.background_color.map(Vec::from))?;
     sheet_value.set_item("content_bounds", sheet.content_bounds.map(Vec::from))?;
+    sheet_value.set_item("content_shift", sheet.content_shift.map(Vec::from))?;
     if include_entities {
         let entities = convert_run_slice(
             py,

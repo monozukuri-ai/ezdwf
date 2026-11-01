@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::{
-    DwfError, DwfPackage, DwfxPackage, W2dEntity, W2dFont, W2dGeometry, W2dRendition,
+    DwfError, DwfPackage, DwfSection, DwfxPackage, W2dEntity, W2dFont, W2dGeometry, W2dRendition,
     W2dSourceSpan, W2dStream, XpsBrush, XpsEntity, XpsGeometry, XpsMatrix, XpsPathGeometry,
     XpsPathSegment, XpsPoint, XpsStyle,
 };
@@ -516,6 +516,9 @@ pub struct NormalizedSheet {
     /// Conservative paper-space geometry bounds. Curves use their complete
     /// transformed ellipse or control hull rather than a sweep-tight bound.
     pub content_bounds: Option<[f64; 4]>,
+    /// Translation added on top of the file's transform when the whole sheet
+    /// would otherwise lie outside its paper or at the end of the int32 range.
+    pub content_shift: Option<[f64; 2]>,
     pub entities: Vec<NormalizedEntity>,
     pub markup_entities: Vec<NormalizedEntity>,
 }
@@ -550,10 +553,18 @@ pub fn normalize_package(package: &DwfPackage) -> Result<NormalizedDrawing, DwfE
                 });
         let mut entities = Vec::with_capacity(plain_count);
         let mut markup_entities = Vec::with_capacity(markup_count);
+        let paper_bounds = page
+            .paper
+            .as_ref()
+            .and_then(|paper| Some([0.0, 0.0, paper.width?, paper.height?]));
+        let content_shift = paper_bounds.and_then(|paper| off_paper_shift(section, paper));
+        let (shift_x, shift_y) = content_shift.map_or((0.0, 0.0), |[x, y]| (x, y));
         for (stream_index, stream) in section.w2d_streams.iter().enumerate() {
             let is_markup = is_markup_role(&stream.role);
-            let transform =
+            let mut transform =
                 Affine2D::from_resource(stream.transform.as_deref(), &section.name, &stream.href)?;
+            transform.e += shift_x;
+            transform.f += shift_y;
             let resource_href: Arc<str> = Arc::from(stream.href.as_str());
             let resource_role: Arc<str> = Arc::from(stream.role.as_str());
             let mut style_cache = StyleCache::default();
@@ -578,10 +589,6 @@ pub fn normalize_package(package: &DwfPackage) -> Result<NormalizedDrawing, DwfE
                 }
             }
         }
-        let paper_bounds = page
-            .paper
-            .as_ref()
-            .and_then(|paper| Some([0.0, 0.0, paper.width?, paper.height?]));
         let clip = page
             .paper
             .as_ref()
@@ -598,11 +605,72 @@ pub fn normalize_package(package: &DwfPackage) -> Result<NormalizedDrawing, DwfE
             clip,
             background_color: page.paper.as_ref().and_then(|paper| paper.color),
             content_bounds,
+            content_shift,
             entities,
             markup_entities,
         });
     }
     Ok(NormalizedDrawing { sheets })
+}
+
+/// Bring a sheet back onto its paper when its transform leaves the whole
+/// drawing off the sheet on an axis.
+///
+/// A real AutoCAD plot keeps its logical X right below `i32::MAX` while the
+/// page transform holds only the paper offset, which puts a sheet that fits
+/// its A0 paper 136 km away from it. The shape is intact, so it is centred.
+fn off_paper_shift(section: &DwfSection, paper: [f64; 4]) -> Option<[f64; 2]> {
+    let mut bounds: Option<[f64; 4]> = None;
+    for stream in &section.w2d_streams {
+        let Some([min_x, min_y, max_x, max_y]) = stream.logical_bounds else {
+            continue;
+        };
+        let transform =
+            Affine2D::from_resource(stream.transform.as_deref(), &section.name, &stream.href)
+                .ok()?;
+        for (x, y) in [
+            (min_x, min_y),
+            (min_x, max_y),
+            (max_x, min_y),
+            (max_x, max_y),
+        ] {
+            let point = transform.transform_point(crate::W2dPoint { x, y });
+            let current = bounds.get_or_insert([point.x, point.y, point.x, point.y]);
+            current[0] = current[0].min(point.x);
+            current[1] = current[1].min(point.y);
+            current[2] = current[2].max(point.x);
+            current[3] = current[3].max(point.y);
+        }
+    }
+    let [min_x, min_y, max_x, max_y] = bounds?;
+    let centre = |low: f64, high: f64, paper_low: f64, paper_high: f64| {
+        if high < paper_low || low > paper_high {
+            (paper_low + paper_high - low - high) / 2.0
+        } else {
+            0.0
+        }
+    };
+    let shift = [
+        centre(min_x, max_x, paper[0], paper[2]),
+        centre(min_y, max_y, paper[1], paper[3]),
+    ];
+    (shift != [0.0, 0.0]).then_some(shift)
+}
+
+/// A stream without paper has no position of its own, so a drawing that sits
+/// entirely in the far half of the int32 range starts at zero on that axis.
+fn far_range_shift(stream: &W2dStream) -> Option<[f64; 2]> {
+    const FAR: i64 = 1 << 30;
+    let [min_x, min_y, max_x, max_y] = stream.logical_bounds?;
+    let shift = |low: i64, high: i64| {
+        if low >= FAR || high <= -FAR {
+            -(low as f64)
+        } else {
+            0.0
+        }
+    };
+    let shift = [shift(min_x, max_x), shift(min_y, max_y)];
+    (shift != [0.0, 0.0]).then_some(shift)
 }
 
 /// Build the backend-neutral paper-space view for a DWFx OPC/XPS package.
@@ -653,6 +721,7 @@ pub fn normalize_dwfx(package: &DwfxPackage) -> NormalizedDrawing {
                     .map(|value| xps_box_to_paper(value, page.height)),
                 background_color: Some([255, 255, 255]),
                 content_bounds,
+                content_shift: None,
                 entities,
                 markup_entities: Vec::new(),
             });
@@ -665,7 +734,13 @@ pub fn normalize_dwfx(package: &DwfxPackage) -> NormalizedDrawing {
 /// Build the same high-level view for a standalone legacy WHIP/DWF stream.
 #[must_use]
 pub fn normalize_stream(stream: &W2dStream) -> NormalizedDrawing {
-    let transform = Affine2D::IDENTITY;
+    let content_shift = far_range_shift(stream);
+    let (shift_x, shift_y) = content_shift.map_or((0.0, 0.0), |[x, y]| (x, y));
+    let transform = Affine2D {
+        e: shift_x,
+        f: shift_y,
+        ..Affine2D::IDENTITY
+    };
     let resource_href: Arc<str> = Arc::from(stream.href.as_str());
     let resource_role: Arc<str> = Arc::from(stream.role.as_str());
     let mut style_cache = StyleCache::default();
@@ -701,6 +776,7 @@ pub fn normalize_stream(stream: &W2dStream) -> NormalizedDrawing {
             clip: None,
             background_color: None,
             content_bounds,
+            content_shift,
             entities,
             markup_entities: Vec::new(),
         }],

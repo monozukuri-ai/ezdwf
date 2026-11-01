@@ -91,6 +91,81 @@ def test_reads_bare_w2d_stream_as_a_single_stream_drawing() -> None:
     ]
 
 
+def _sheet_with_plot(transform: str, *lines: str) -> bytes:
+    """A DWF 6 package on 1189 x 841 mm paper with the given W2D lines."""
+    descriptor = f"""<?xml version="1.0" encoding="UTF-8"?>
+<ePlot:Page xmlns:ePlot="DWF-ePlot:1.2" version="1.2" plotOrder="1" name="Sheet">
+  <ePlot:Paper show="true" units="mm" width="1189" height="841" clip="0 0 1189 841"/>
+  <ePlot:Resources>
+    <ePlot:GraphicResource role="2d streaming graphics" mime="application/x-w2d" href="sheet\\main.w2d" transform="{transform}"/>
+  </ePlot:Resources>
+</ePlot:Page>"""
+    w2d = "(W2D V06.00)\n" + "\n".join(lines) + "\n(EndOfDWF)\n"
+    return make_dwf(
+        w2d=w2d.encode("ascii"),
+        extra_entries={"sheet\\descriptor.xml": descriptor.encode("utf-8")},
+    )
+
+
+def test_sheet_outside_its_paper_is_centred_on_it() -> None:
+    # 実物の AutoCAD の plot: X は i32::MAX の手前、transform は用紙の余白だけを持つ
+    data = _sheet_with_plot(
+        "0.0635 0 0 0 0 0.0635 0 0 0 0 1 0 72.086768 0 0 1",
+        "(Line 2147464949,1135 2147483647,12082)",
+    )
+
+    sheet = ezdwf.read(data).sheets[0]
+
+    width = 18698 * 0.0635
+    assert sheet.content_bounds == pytest.approx(
+        ((1189 - width) / 2, 1135 * 0.0635, (1189 + width) / 2, 12082 * 0.0635)
+    )
+    assert sheet.content_shift[0] == pytest.approx(
+        (1189 - width) / 2 - (2147464949 * 0.0635 + 72.086768)
+    )
+    assert sheet.content_shift[1] == 0.0
+
+
+def test_sheet_touching_its_paper_keeps_the_file_coordinates() -> None:
+    data = _sheet_with_plot(
+        "0.0635 0 0 0 0 0.0635 0 0 0 0 1 0 0 0 0 1",
+        "(Line -1000,100 1000,200)",
+    )
+
+    sheet = ezdwf.read(data).sheets[0]
+
+    assert sheet.content_shift is None
+    assert sheet.content_bounds == pytest.approx((-63.5, 6.35, 63.5, 12.7))
+
+
+def test_legacy_stream_at_the_end_of_the_int32_range_starts_at_zero() -> None:
+    far = ezdwf.read(
+        b"(DWF V00.42)\n(Line 2147332424,-5 2147482475,70)\n(EndOfDWF)\n"
+    ).sheets[0]
+    near = ezdwf.read(b"(DWF V00.42)\n(Line 136166,-5 731140,70)\n(EndOfDWF)\n").sheets[
+        0
+    ]
+
+    assert far.content_bounds == (0.0, -5.0, 150051.0, 70.0)
+    assert far.content_shift == (-2147332424.0, 0.0)
+    assert near.content_bounds == (136166.0, -5.0, 731140.0, 70.0)
+    assert near.content_shift is None
+
+
+def test_keep_raw_false_leaves_out_the_raw_records(dwf_bytes: bytes) -> None:
+    kept = ezdwf.read(dwf_bytes)
+    lean = ezdwf.read(dwf_bytes, keep_raw=False)
+
+    assert [e.kind for e in lean.sheets[0].entities] == [
+        e.kind for e in kept.sheets[0].entities
+    ]
+    assert lean.sheets[0].content_bounds == kept.sheets[0].content_bounds
+    assert lean.diagnostics == kept.diagnostics
+    assert all(entity.raw is None for entity in lean.sheets[0].entities)
+    assert all(entity.raw is not None for entity in kept.sheets[0].entities)
+    assert lean.package.manifest.sections[0].w2d_streams[0].entities == ()
+
+
 def test_drawing_handle_defers_package_entities(dwf_bytes: bytes) -> None:
     eager = _core.read_drawing_bytes(dwf_bytes, *DEFAULT_LIMITS.as_args())
     handle = _core.read_drawing_handle(dwf_bytes, *DEFAULT_LIMITS.as_args())

@@ -587,6 +587,9 @@ class Sheet:
     markup_entities: EntityQuery
     section_index: int
     raw: Section | W2dStream | XpsPage = field(repr=False, compare=False)
+    # Added to the file's coordinates when the whole sheet would otherwise lie
+    # outside its paper or at the end of the int32 range.
+    content_shift: tuple[float, float] | None = None
 
     def __iter__(self) -> Iterator[Entity]:
         return iter(self.entities)
@@ -743,8 +746,14 @@ def read(
     source: DwfSource,
     *,
     limits: ParseLimits = DEFAULT_LIMITS,
+    keep_raw: bool = True,
 ) -> Drawing:
-    """Parse DWF 6, DWFx, or a legacy 2D stream into raw and normalized views."""
+    """Parse DWF 6, DWFx, or a legacy 2D stream into raw and normalized views.
+
+    ``keep_raw=False`` leaves out the raw W2D records of a DWF 6 package, a
+    second copy of every entity: ``entity.raw`` is ``None`` and the streams in
+    ``drawing.raw`` have no entities.
+    """
 
     data = _load_data(source, max_file_size=limits.max_file_size)
     # Streamed conversion: the handle keeps the parsed drawing in Rust and
@@ -756,19 +765,20 @@ def read(
     # hundred MB with byte-identical results.
     handle = _core.read_drawing_handle(data, *limits.as_args())
     source_name = os.fspath(source) if isinstance(source, (str, os.PathLike)) else None
-    return _drawing_from_handle(handle, source_name=source_name)
+    return _drawing_from_handle(handle, source_name=source_name, keep_raw=keep_raw)
 
 
 def readfile(
     path: PathSource,
     *,
     limits: ParseLimits = DEFAULT_LIMITS,
+    keep_raw: bool = True,
 ) -> Drawing:
     """Read a filesystem path with the high-level normalized model."""
 
     if not isinstance(path, (str, os.PathLike)):
         raise TypeError("readfile() requires a filesystem path")
-    return read(path, limits=limits)
+    return read(path, limits=limits, keep_raw=keep_raw)
 
 
 def _drawing_from_mapping(
@@ -810,6 +820,8 @@ def _sheet_from_mapping(
     package: PackageInfo | None,
     legacy_stream: W2dStream | None,
     dwfx_package: DwfxPackageInfo | None,
+    *,
+    link_raw: bool = True,
 ) -> Sheet:
     section_index = int(sheet_value["section_index"])
     raw_section: Section | W2dStream | XpsPage
@@ -829,6 +841,7 @@ def _sheet_from_mapping(
             package,
             legacy_stream,
             dwfx_package,
+            embedded=not link_raw,
             style_cache=style_cache,
         )
         for entity_value in cast(
@@ -841,6 +854,7 @@ def _sheet_from_mapping(
             package,
             legacy_stream,
             dwfx_package,
+            embedded=not link_raw,
             style_cache=markup_style_cache,
         )
         for entity_value in cast(
@@ -860,6 +874,12 @@ def _sheet_from_mapping(
         markup_entities=EntityQuery(markup_entities),
         section_index=section_index,
         raw=raw_section,
+        content_shift=cast(
+            "tuple[float, float] | None",
+            tuple(sheet_value["content_shift"])
+            if sheet_value.get("content_shift")
+            else None,
+        ),
     )
 
 
@@ -885,6 +905,7 @@ def _drawing_from_handle(
     handle: Any,
     *,
     source_name: str | None,
+    keep_raw: bool = True,
 ) -> Drawing:
     """Build a :class:`Drawing` from a ``_core.DrawingHandle``, converting one
     piece at a time so no monolithic dict tree ever exists (see ``read``)."""
@@ -897,10 +918,14 @@ def _drawing_from_handle(
         shell = cast(Mapping[str, Any], handle.package_shell())
         package = _package_from_mapping(
             shell,
-            stream_entities_loader=lambda section_index, stream_index: _chunked_rows(
-                lambda start, count: handle.stream_entities(
-                    section_index, stream_index, start, count
+            stream_entities_loader=lambda section_index, stream_index: (
+                _chunked_rows(
+                    lambda start, count: handle.stream_entities(
+                        section_index, stream_index, start, count
+                    )
                 )
+                if keep_raw
+                else ()
             ),
         )
         del shell
@@ -927,7 +952,13 @@ def _drawing_from_handle(
             )
         )
         sheets.append(
-            _sheet_from_mapping(sheet_value, package, legacy_stream, dwfx_package)
+            _sheet_from_mapping(
+                sheet_value,
+                package,
+                legacy_stream,
+                dwfx_package,
+                link_raw=keep_raw or package is None,
+            )
         )
         del sheet_value
     return Drawing(
