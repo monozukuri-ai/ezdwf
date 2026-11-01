@@ -325,8 +325,16 @@ struct DrawingHandle {
     dwfx_package: Option<DwfxPackage>,
     drawing: NormalizedDrawing,
     /// Per sheet, how many leading `entities` / `markup_entities` a
-    /// `take_sheet_*` call has released.
+    /// `take_sheet_*` call has released (counted in the sheet's original
+    /// order).
     consumed: Vec<[usize; 2]>,
+    /// Per sheet, how many leading `entities` / `markup_entities` have been
+    /// dropped from the vector itself. Position `i` of the vector is entity
+    /// `i + dropped` of the original order.
+    dropped: Vec<[usize; 2]>,
+    /// Released entities a sheet keeps before its prefix is dropped
+    /// (`DROP_PREFIX_ENTITIES`; tests lower it to exercise the dropping).
+    drop_prefix: usize,
     /// Entities released since freed heap was last returned to the OS.
     consumed_since_trim: usize,
 }
@@ -336,22 +344,56 @@ struct DrawingHandle {
 /// reuse them: one plot set kept 800 MB of released geometry in RSS.
 const TRIM_EVERY_ENTITIES: usize = 16_384;
 
+/// `take_sheet_*` drops the released prefix of a sheet's vector once it holds
+/// this many entities (or the whole sheet). A `NormalizedEntity` is 408 bytes
+/// before any geometry, so releasing only the geometry of a plot set with
+/// 1.7 million short polylines left 700 MB of empty records in the handle
+/// until it was dropped; the records now go while the caller's objects grow.
+/// Dropping is a memmove of the remainder, so it is done in batches.
+const DROP_PREFIX_ENTITIES: usize = 32_768;
+
 impl DrawingHandle {
     fn new(
         package: Option<DwfPackage>,
         legacy_stream: Option<W2dStream>,
         dwfx_package: Option<DwfxPackage>,
         drawing: NormalizedDrawing,
+        drop_prefix: usize,
     ) -> Self {
         let consumed = vec![[0, 0]; drawing.sheets.len()];
+        let dropped = consumed.clone();
         Self {
             package,
             legacy_stream,
             dwfx_package,
             drawing,
             consumed,
+            dropped,
+            drop_prefix: drop_prefix.max(1),
             consumed_since_trim: 0,
         }
+    }
+
+    /// The remaining `entities` / `markup_entities` of a sheet as a slice in
+    /// original positions `start..start + count` (dropped entities are absent).
+    fn remaining_slice(
+        &self,
+        index: usize,
+        start: usize,
+        count: usize,
+        markup: bool,
+    ) -> PyResult<(&[NormalizedEntity], usize, usize)> {
+        let sheet = self.sheet_at(index)?;
+        let entities = if markup {
+            &sheet.markup_entities
+        } else {
+            &sheet.entities
+        };
+        let dropped = self.dropped[index][usize::from(markup)];
+        let end = start.saturating_add(count);
+        let local_start = start.max(dropped) - dropped;
+        let local_count = end.saturating_sub(dropped).saturating_sub(local_start);
+        Ok((entities, local_start, local_count))
     }
 
     fn sheet_at(&self, index: usize) -> PyResult<&NormalizedSheet> {
@@ -382,17 +424,33 @@ impl DrawingHandle {
         } else {
             &mut sheet.entities
         };
-        let consumed = &mut self.consumed[index][usize::from(markup)];
+        let slot = usize::from(markup);
+        let consumed = &mut self.consumed[index][slot];
+        let dropped = &mut self.dropped[index][slot];
         if start < *consumed {
             return Ok(PyList::empty(py).into_any().unbind());
         }
-        let rows = entity_slice_to_python(py, entities, start, count)?;
-        let end = start.saturating_add(count).min(entities.len());
-        for entity in &mut entities[start.min(end)..end] {
+        // `start >= consumed >= dropped`: positions are relative to the vector.
+        let local_start = (start - *dropped).min(entities.len());
+        let local_end = local_start.saturating_add(count).min(entities.len());
+        let rows = entity_slice_to_python(py, entities, local_start, count, *dropped)?;
+        for entity in &mut entities[local_start..local_end] {
             release_entity(entity);
         }
-        let taken = end.saturating_sub(start);
-        *consumed = end.max(*consumed);
+        let taken = local_end - local_start;
+        *consumed = (*dropped + local_end).max(*consumed);
+        // The released prefix (geometry already freed) still costs the record
+        // itself; drop it from the vector in batches, and whole when the sheet
+        // is finished, so the handle shrinks as the reader advances.
+        let released_prefix = *consumed - *dropped;
+        if released_prefix > 0
+            && (released_prefix >= self.drop_prefix || released_prefix >= entities.len())
+        {
+            let keep = released_prefix.min(entities.len());
+            entities.drain(..keep);
+            entities.shrink_to_fit();
+            *dropped += keep;
+        }
         self.consumed_since_trim += taken;
         if taken == 0 || self.consumed_since_trim >= TRIM_EVERY_ENTITIES {
             if self.consumed_since_trim > 0 {
@@ -466,17 +524,20 @@ impl DrawingHandle {
         self.drawing.sheets.len()
     }
 
+    /// The number of entities the sheet was read with (taken ones included).
     fn sheet_entity_count(&self, index: usize) -> PyResult<usize> {
-        self.sheet_at(index).map(|sheet| sheet.entities.len())
+        self.sheet_at(index)
+            .map(|sheet| sheet.entities.len() + self.dropped[index][0])
     }
 
     fn sheet_markup_entity_count(&self, index: usize) -> PyResult<usize> {
         self.sheet_at(index)
-            .map(|sheet| sheet.markup_entities.len())
+            .map(|sheet| sheet.markup_entities.len() + self.dropped[index][1])
     }
 
     /// One normalized sheet as the same dict `read_drawing_bytes` produced
-    /// inside `drawing.sheets[index]`.
+    /// inside `drawing.sheets[index]` (without the entities a `take_sheet_*`
+    /// call has dropped).
     fn sheet(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyAny>> {
         let sheet = self.drawing.sheets.get(index).ok_or_else(|| {
             pyo3::exceptions::PyIndexError::new_err(format!(
@@ -503,7 +564,9 @@ impl DrawingHandle {
             .unbind())
     }
 
-    /// A slice of one sheet's normalized entity dicts (empty past the end).
+    /// A slice of one sheet's normalized entity dicts in original positions
+    /// `start..start + count` (empty past the end; entities a `take_sheet_*`
+    /// call has dropped are absent).
     fn sheet_entities(
         &self,
         py: Python<'_>,
@@ -511,16 +574,18 @@ impl DrawingHandle {
         start: usize,
         count: usize,
     ) -> PyResult<Py<PyAny>> {
-        let sheet = self.drawing.sheets.get(index).ok_or_else(|| {
-            pyo3::exceptions::PyIndexError::new_err(format!(
-                "sheet index {index} out of range (0..{})",
-                self.drawing.sheets.len()
-            ))
-        })?;
-        entity_slice_to_python(py, &sheet.entities, start, count)
+        let (entities, local_start, local_count) =
+            self.remaining_slice(index, start, count, false)?;
+        entity_slice_to_python(
+            py,
+            entities,
+            local_start,
+            local_count,
+            self.dropped[index][0],
+        )
     }
 
-    /// A slice of one sheet's markup entity dicts (empty past the end).
+    /// A slice of one sheet's markup entity dicts (see `sheet_entities`).
     fn sheet_markup_entities(
         &self,
         py: Python<'_>,
@@ -528,13 +593,15 @@ impl DrawingHandle {
         start: usize,
         count: usize,
     ) -> PyResult<Py<PyAny>> {
-        let sheet = self.drawing.sheets.get(index).ok_or_else(|| {
-            pyo3::exceptions::PyIndexError::new_err(format!(
-                "sheet index {index} out of range (0..{})",
-                self.drawing.sheets.len()
-            ))
-        })?;
-        entity_slice_to_python(py, &sheet.markup_entities, start, count)
+        let (entities, local_start, local_count) =
+            self.remaining_slice(index, start, count, true)?;
+        entity_slice_to_python(
+            py,
+            entities,
+            local_start,
+            local_count,
+            self.dropped[index][1],
+        )
     }
 
     /// `sheet_entities`, after which the returned entities are released from
@@ -542,8 +609,10 @@ impl DrawingHandle {
     /// and freed heap is returned to the OS now and then, so a one-pass
     /// reader's drawing shrinks while its own objects grow. A range that
     /// starts inside the taken prefix of a sheet comes back empty: a sheet is
-    /// taken once. `sheet_entities` still lists released entities, as empty
-    /// polylines.
+    /// taken once. The released prefix is dropped from the sheet in batches
+    /// (and whole once the sheet is finished): `sheet_entities` then lists
+    /// what remains, still released ones as empty polylines, and
+    /// `sheet_entity_count` keeps reporting the original count.
     fn take_sheet_entities(
         &mut self,
         py: Python<'_>,
@@ -655,7 +724,7 @@ impl DrawingHandle {
     max_compression_ratio, max_xml_size, max_xml_depth, max_w2d_records,
     max_w2d_points_per_entity, max_w2d_total_points, max_w2d_entities, max_w2d_string_size,
     max_w2d_nesting_depth, max_w2d_decompressed_size, max_w2d_compression_depth,
-    max_xps_visuals, max_xps_path_segments, keep_raw = true
+    max_xps_visuals, max_xps_path_segments, keep_raw = true, drop_prefix = DROP_PREFIX_ENTITIES
 ))]
 fn read_drawing_handle(
     data: &[u8],
@@ -677,6 +746,7 @@ fn read_drawing_handle(
     max_xps_visuals: usize,
     max_xps_path_segments: usize,
     keep_raw: bool,
+    drop_prefix: usize,
 ) -> PyResult<DrawingHandle> {
     let options = parse_options(
         max_file_size,
@@ -711,7 +781,7 @@ fn read_drawing_handle(
                     }
                 }
             }
-            DrawingHandle::new(Some(package), None, None, drawing)
+            DrawingHandle::new(Some(package), None, None, drawing, drop_prefix)
         }
         DwfFormat::LegacyDwf { .. } | DwfFormat::W2dStream { .. } => {
             let (resource, role, mime) = single_stream_identity(&format);
@@ -720,7 +790,7 @@ fn read_drawing_handle(
             stream.role = role.to_owned();
             stream.mime = mime.to_owned();
             let drawing = normalize_stream(&stream);
-            DrawingHandle::new(None, Some(stream), None, drawing)
+            DrawingHandle::new(None, Some(stream), None, drawing, drop_prefix)
         }
         DwfFormat::Dwfx => {
             let mut package = inspect_dwfx(data, options).map_err(core_error_to_python)?;
@@ -732,7 +802,7 @@ fn read_drawing_handle(
                     }
                 }
             }
-            DrawingHandle::new(None, None, Some(package), drawing)
+            DrawingHandle::new(None, None, Some(package), drawing, drop_prefix)
         }
     };
     // Parsing and the dropped raw model leave freed chunks in the heap that
@@ -907,11 +977,16 @@ fn convert_run_slice<'py, T>(
     Ok(list)
 }
 
+/// `entities[start..start + count]` as dicts. `id_base` is the number of
+/// entities dropped from the front of the vector: `style_id` stays the run
+/// start in the sheet's original order, so one Python-side cache per sheet
+/// never sees two styles under one id.
 fn entity_slice_to_python(
     py: Python<'_>,
     entities: &[NormalizedEntity],
     start: usize,
     count: usize,
+    id_base: usize,
 ) -> PyResult<Py<PyAny>> {
     let list = convert_run_slice(
         py,
@@ -919,7 +994,7 @@ fn entity_slice_to_python(
         start,
         start.saturating_add(count),
         style_shared,
-        normalized_entity_to_python,
+        |py, entity, run_start| normalized_entity_to_python(py, entity, run_start + id_base),
     )?;
     Ok(list.into_any().unbind())
 }

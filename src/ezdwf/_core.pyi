@@ -158,6 +158,7 @@ def read_drawing_handle(
     max_xps_visuals: int,
     max_xps_path_segments: int,
     keep_raw: bool = True,
+    drop_prefix: int = 32768,
 ) -> DrawingHandle: ...
 def decode_w2d_bytes(
     data: bytes,

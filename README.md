@@ -78,9 +78,12 @@ for index, sheet in enumerate(reader.sheets):
 Pass `consume=True` when every sheet is read once, as a converter does: each
 chunk of entities is then released from the Rust core as it is yielded and the
 freed memory goes back to the operating system, so the drawing's footprint
-shrinks while your own objects grow instead of both peaking together. Dropping
-the reader returns the rest of the package the same way (`read` does so as soon
-as its dataclasses are built), so a long-running process keeps only its live data.
+shrinks while your own objects grow instead of both peaking together. The
+released entities' records go too, in batches and whole once a sheet is
+finished (a plot set of 1.7 million short polylines otherwise kept 700 MB of
+empty records until the reader was dropped). Dropping the reader returns the
+rest of the package the same way (`read` does so as soon as its dataclasses are
+built), so a long-running process keeps only its live data.
 
 `ezdwf.read(..., keep_raw=False)` likewise leaves out the raw W2D / XPS
 records, a second copy of every entity.

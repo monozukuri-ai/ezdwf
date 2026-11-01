@@ -242,6 +242,77 @@ def test_open_drawing_consume_yields_each_sheet_once(
     assert handle.take_sheet_entities(0, 10_000_000, 10) == []
 
 
+@pytest.mark.parametrize("fixture", ["dwf_bytes", "dwfx_bytes"])
+def test_taken_sheets_drop_their_records(
+    request: pytest.FixtureRequest, fixture: str
+) -> None:
+    # A released entity still costs its 400-byte record; once a sheet is taken
+    # (or the released prefix is large) the records go too. Counts and the
+    # positions of what remains do not change.
+    data = request.getfixturevalue(fixture)
+    whole = ezdwf.read(data, keep_raw=False)
+    total = len(whole.sheets[0].entities)
+    handle = _core.read_drawing_handle(data, *DEFAULT_LIMITS.as_args(), keep_raw=False)
+    assert len(handle.take_sheet_entities(0, 0, 1)) == 1
+    # Released but not yet dropped: listed as an empty polyline
+    assert len(handle.sheet_entities(0, 0, 1)) == 1
+    assert handle.sheet_entity_count(0) == total
+    rest = handle.take_sheet_entities(0, 1, 1_000_000)
+    assert len(rest) == total - 1
+    assert [e["entity_index"] for e in rest] == [
+        e.entity_index for e in whole.sheets[0].entities[1:]
+    ]
+    # The sheet is finished: its records are gone, the count is unchanged
+    assert handle.sheet_entity_count(0) == total
+    assert handle.sheet_entities(0, 0, 1_000_000) == []
+    assert handle.take_sheet_entities(0, 0, 1) == []
+    assert handle.sheet(0)["entities"] == []
+    assert handle.sheet(0)["name"] == whole.sheets[0].name
+
+
+@pytest.mark.parametrize("fixture", ["dwf_bytes", "dwfx_bytes"])
+def test_dropping_records_mid_sheet_keeps_styles_and_positions(
+    request: pytest.FixtureRequest, fixture: str
+) -> None:
+    # `drop_prefix=1` drops the released prefix after every chunk, as a sheet of
+    # hundreds of thousands of entities does every 32,768. `style_id` must stay
+    # the run start in the sheet's original order: the reader caches styles by
+    # it per sheet, and ids restarting at the dropped boundary made entities
+    # take another run's style (a plot set lost 4 MB of its SVG that way).
+    from ezdwf.document import DrawingReader
+
+    data = request.getfixturevalue(fixture)
+    whole = ezdwf.read(data, keep_raw=False)
+    handle = _core.read_drawing_handle(
+        data, *DEFAULT_LIMITS.as_args(), keep_raw=False, drop_prefix=1
+    )
+    reader = DrawingReader(handle, source_name=None, consume=True)
+    assert list(reader.entities(0)) == list(whole.sheets[0].entities)
+    assert list(reader.markup_entities(0)) == list(whole.sheets[0].markup_entities)
+    assert reader.entity_count(0) == len(whole.sheets[0].entities)
+
+    # Handle level: ids are unique in the original order even across drops
+    handle = _core.read_drawing_handle(
+        data, *DEFAULT_LIMITS.as_args(), keep_raw=False, drop_prefix=1
+    )
+    total = len(whole.sheets[0].entities)
+    seen: dict[int, object] = {}
+    start = 0
+    while start < total:
+        rows = handle.take_sheet_entities(0, start, 3)
+        assert rows, start
+        for offset, row in enumerate(rows):
+            style_id = row["style_id"]
+            # the run start never lies after the entity itself
+            assert style_id <= start + offset
+            if style_id in seen:
+                assert seen[style_id] == row["style"], style_id
+            seen[style_id] = row["style"]
+        start += len(rows)
+    assert handle.sheet_entity_count(0) == total
+    assert handle.take_sheet_entities(0, start, 3) == []
+
+
 def test_drawing_handle_defers_package_entities(dwf_bytes: bytes) -> None:
     eager = _core.read_drawing_bytes(dwf_bytes, *DEFAULT_LIMITS.as_args())
     handle = _core.read_drawing_handle(dwf_bytes, *DEFAULT_LIMITS.as_args())

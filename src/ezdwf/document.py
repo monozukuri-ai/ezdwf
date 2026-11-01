@@ -1158,6 +1158,9 @@ def open_drawing(
     been yielded (and returns the freed memory to the operating system), for
     a conversion that reads every sheet once. The reader's memory then shrinks
     while the converted objects grow, instead of both copies peaking together.
+    The records of released entities go too, in batches and whole once a sheet
+    is finished (a plot set of 1.7 million short polylines kept 700 MB of empty
+    400-byte records until the reader was dropped).
     """
 
     data = _load_data(source, max_file_size=limits.max_file_size)
