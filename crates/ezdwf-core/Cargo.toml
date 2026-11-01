@@ -12,6 +12,8 @@ license.workspace = true
 name = "ezdwf_core"
 
 [dependencies]
+# CCITT Group 4 (T.6) decoder for the group4 / group4x_mapped image records.
+fax = "=0.3.0"
 flate2 = { version = "1.1.9", default-features = false, features = ["zlib-rs"] }
 # Keep `zip`'s broad indexmap 2.x dependency on an edition-2021 release so
 # Cargo 1.83 can read the complete dependency graph.

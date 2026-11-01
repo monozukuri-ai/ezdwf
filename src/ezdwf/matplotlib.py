@@ -13,6 +13,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
+from ._core import DwfError
 from .document import (
     Bounds2D,
     Brush,
@@ -537,6 +538,12 @@ class _Renderer:
                 pixels = self.np.frombuffer(rgba, dtype=self.np.uint8).reshape(
                     image.rows, image.columns, 4
                 )
+            else:
+                # Group 4 and TIFF-wrapped images decode in the Rust core.
+                try:
+                    pixels = self.image_read(BytesIO(image.to_png()), format="png")
+                except DwfError:
+                    pixels = None
 
         left = min(image.min.x, image.max.x)
         right = max(image.min.x, image.max.x)

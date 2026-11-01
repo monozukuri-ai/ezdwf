@@ -78,6 +78,25 @@ class Image:
     color_map: tuple[RgbaColor, ...]
     data: bytes
 
+    def to_png(self) -> bytes:
+        """Return this image as PNG bytes.
+
+        PNG data comes back unchanged. Raw rows (``rgb``, ``rgba``, ``indexed``,
+        ``mapped``, ``bitonal_mapped``) and Group 4 streams (``group4`` and
+        ``group4x_mapped``, bare or wrapped in a TIFF) are converted; a two-color
+        image takes its colors from ``color_map`` by bit value, index 0 for the
+        white runs. JPEG data is a container of its own and raises
+        :class:`UnsupportedDwfError`; use ``data`` for it. Data that does not
+        decode raises :class:`InvalidDwfError`.
+        """
+        return _core.image_to_png(
+            self.format,
+            self.columns,
+            self.rows,
+            [tuple(color) for color in self.color_map],
+            self.data,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ImageBrush:

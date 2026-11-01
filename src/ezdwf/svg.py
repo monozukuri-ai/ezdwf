@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TypeAlias, cast
 
+from ._core import DwfError
 from .document import (
     Bounds2D,
     Brush,
@@ -1733,10 +1734,15 @@ def _image_data_uri(image: Image) -> str | None:
         payload = image.data
     else:
         pixels = _image_rgba_pixels(image)
-        if pixels is None:
-            return None
         mime = "image/png"
-        payload = _encode_rgba_png(image.columns, image.rows, pixels)
+        if pixels is not None:
+            payload = _encode_rgba_png(image.columns, image.rows, pixels)
+        else:
+            # Group 4 and TIFF-wrapped images decode in the Rust core.
+            try:
+                payload = image.to_png()
+            except DwfError:
+                return None
     return f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
 
 

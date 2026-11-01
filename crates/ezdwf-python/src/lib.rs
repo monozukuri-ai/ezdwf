@@ -49,6 +49,22 @@ fn core_version() -> String {
     ezdwf_core::version().to_owned()
 }
 
+/// PNG bytes of a W2D image record; see `ezdwf_core::image_to_png`.
+#[pyfunction]
+#[pyo3(signature = (format, columns, rows, color_map, data))]
+fn image_to_png(
+    py: Python<'_>,
+    format: &str,
+    columns: u16,
+    rows: u16,
+    color_map: Vec<[u8; 4]>,
+    data: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let png = ezdwf_core::image_to_png(format, columns, rows, &color_map, data)
+        .map_err(core_error_to_python)?;
+    Ok(PyBytes::new(py, &png).unbind())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
 fn detect_format_bytes(
@@ -2479,6 +2495,7 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("UnsupportedDwfError", py.get_type::<UnsupportedDwfError>())?;
     module.add("DwfLimitError", py.get_type::<DwfLimitError>())?;
     module.add_function(wrap_pyfunction!(core_version, module)?)?;
+    module.add_function(wrap_pyfunction!(image_to_png, module)?)?;
     module.add_function(wrap_pyfunction!(detect_format_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(inspect_package_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(inspect_dwfx_bytes, module)?)?;

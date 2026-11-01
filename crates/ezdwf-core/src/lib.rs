@@ -13,6 +13,7 @@ mod model;
 mod normalized;
 mod options;
 mod package;
+mod raster;
 mod w2d;
 
 pub use dwfx::{
@@ -44,6 +45,7 @@ pub use options::{
     DEFAULT_MAX_XML_SIZE_BYTES, DEFAULT_MAX_XPS_PATH_SEGMENTS, DEFAULT_MAX_XPS_VISUALS,
 };
 pub use package::inspect_package;
+pub use raster::{image_to_png, normalized_image_to_png};
 pub use w2d::{
     decode_w2d, W2dBlockRef, W2dColoredPoint, W2dEmbeddedFont, W2dEntity, W2dFont, W2dGeometry,
     W2dImage, W2dLayer, W2dLineStyle, W2dPoint, W2dRendition, W2dSourceSpan, W2dStream, W2dUnits,

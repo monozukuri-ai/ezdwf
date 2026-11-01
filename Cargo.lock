@@ -60,8 +60,9 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "ezdwf-core"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
+ "fax",
  "flate2",
  "indexmap",
  "quick-xml",
@@ -74,11 +75,17 @@ dependencies = [
 
 [[package]]
 name = "ezdwf-python"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "ezdwf-core",
  "pyo3",
 ]
+
+[[package]]
+name = "fax"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70ed8646f3993cad0585c6669ffba6f7e5440a0bfb0a1f16600cae33ce7cf307"
 
 [[package]]
 name = "flate2"

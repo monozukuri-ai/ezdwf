@@ -35,6 +35,13 @@ class DrawingHandle:
     def dwfx_package(self) -> dict[str, Any]: ...
 
 def core_version() -> str: ...
+def image_to_png(
+    format: str,
+    columns: int,
+    rows: int,
+    color_map: list[tuple[int, int, int, int]],
+    data: bytes,
+) -> bytes: ...
 def detect_format_bytes(
     data: bytes,
     max_file_size: int,

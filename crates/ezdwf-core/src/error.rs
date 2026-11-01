@@ -184,6 +184,12 @@ pub enum DwfError {
 
     #[error("XPS FixedPage {page:?} contains more than {limit} path segments")]
     XpsPathSegmentLimitExceeded { page: String, limit: usize },
+
+    #[error("{format} image is not decoded: {context}")]
+    UnsupportedImage { format: String, context: String },
+
+    #[error("invalid {format} image: {context}")]
+    InvalidImage { format: String, context: String },
 }
 
 impl DwfError {
@@ -222,6 +228,7 @@ impl DwfError {
                 | Self::UnsupportedW2dOpcode { .. }
                 | Self::UnsupportedW2dVersion { .. }
                 | Self::UnsupportedDwfxContent { .. }
+                | Self::UnsupportedImage { .. }
         )
     }
 }
