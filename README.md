@@ -64,6 +64,25 @@ first_sheet = drawing.sheet(0)
 named_sheet = drawing.sheet("Floor Plan")
 ```
 
+A large plot set can be read one chunk of entities at a time. The drawing
+stays in the Rust core; `reader.sheets` carry names, paper and bounds but no
+entities, and `reader.entities(index)` yields one sheet's entities in order:
+
+```python
+reader = ezdwf.open_drawing("plot-set.dwfx")
+for index, sheet in enumerate(reader.sheets):
+    for entity in reader.entities(index):
+        ...
+```
+
+Pass `consume=True` when every sheet is read once, as a converter does: each
+chunk of entities is then released from the Rust core as it is yielded and the
+freed memory goes back to the operating system, so the drawing's footprint
+shrinks while your own objects grow instead of both peaking together.
+
+`ezdwf.read(..., keep_raw=False)` likewise leaves out the raw W2D / XPS
+records, a second copy of every entity.
+
 ## Command line
 
 ```console

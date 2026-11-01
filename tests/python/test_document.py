@@ -166,6 +166,82 @@ def test_keep_raw_false_leaves_out_the_raw_records(dwf_bytes: bytes) -> None:
     assert lean.package.manifest.sections[0].w2d_streams[0].entities == ()
 
 
+def test_keep_raw_false_leaves_out_the_xps_entities(dwfx_bytes: bytes) -> None:
+    kept = ezdwf.read(dwfx_bytes)
+    lean = ezdwf.read(dwfx_bytes, keep_raw=False)
+
+    assert [e.kind for e in lean.sheets[0].entities] == [
+        e.kind for e in kept.sheets[0].entities
+    ]
+    assert lean.sheets[0].content_bounds == kept.sheets[0].content_bounds
+    assert all(entity.raw is None for entity in lean.sheets[0].entities)
+    assert all(entity.raw is not None for entity in kept.sheets[0].entities)
+    assert lean.dwfx_package is not None and kept.dwfx_package is not None
+    assert lean.dwfx_package.pages[0].entities == ()
+    assert kept.dwfx_package.pages[0].entities
+    assert lean.dwfx_package.pages[0].width == kept.dwfx_package.pages[0].width
+
+
+@pytest.mark.parametrize("fixture", ["dwf_bytes", "dwfx_bytes"])
+def test_open_drawing_streams_each_sheet(
+    request: pytest.FixtureRequest, fixture: str
+) -> None:
+    data = request.getfixturevalue(fixture)
+    whole = ezdwf.read(data, keep_raw=False)
+    reader = ezdwf.open_drawing(data)
+
+    assert len(reader) == len(whole.sheets) == 1
+    shell, sheet = reader.sheets[0], whole.sheets[0]
+    assert (shell.name, shell.units, shell.paper_bounds, shell.content_bounds) == (
+        sheet.name,
+        sheet.units,
+        sheet.paper_bounds,
+        sheet.content_bounds,
+    )
+    assert len(shell.entities) == 0 and len(shell.markup_entities) == 0
+    assert reader.entity_count(0) == len(sheet.entities)
+    assert reader.markup_entity_count(0) == len(sheet.markup_entities)
+    streamed = list(reader.entities(0))
+    assert streamed == list(sheet.entities)
+    assert list(reader.markup_entities(0)) == list(sheet.markup_entities)
+    assert reader.diagnostics == whole.diagnostics
+    assert reader.is_dwfx == whole.is_dwfx
+    with pytest.raises(IndexError):
+        reader.entity_count(1)
+
+
+@pytest.mark.parametrize("fixture", ["dwf_bytes", "dwfx_bytes"])
+def test_open_drawing_consume_yields_each_sheet_once(
+    request: pytest.FixtureRequest, fixture: str
+) -> None:
+    data = request.getfixturevalue(fixture)
+    whole = ezdwf.read(data, keep_raw=False)
+    reader = ezdwf.open_drawing(data, consume=True)
+
+    assert list(reader.entities(0)) == list(whole.sheets[0].entities)
+    assert list(reader.markup_entities(0)) == list(whole.sheets[0].markup_entities)
+    # The entities were released from the Rust core: a sheet is read once
+    assert list(reader.entities(0)) == []
+    assert reader.entity_count(0) == len(whole.sheets[0].entities)
+    # Without consume a sheet can be iterated again
+    again = ezdwf.open_drawing(data)
+    assert list(again.entities(0)) == list(again.entities(0))
+    assert list(again.entities(0)) == list(whole.sheets[0].entities)
+
+    # Handle level: a taken range comes back empty afterwards, a plain read
+    # still lists the released entities (as empty polylines)
+    handle = _core.read_drawing_handle(data, *DEFAULT_LIMITS.as_args(), keep_raw=False)
+    first = handle.take_sheet_entities(0, 0, 1)
+    assert len(first) == 1
+    assert handle.take_sheet_entities(0, 0, 1) == []
+    assert len(handle.sheet_entities(0, 0, 1)) == 1
+    assert (
+        len(handle.take_sheet_entities(0, 1, 1_000_000))
+        == len(whole.sheets[0].entities) - 1
+    )
+    assert handle.take_sheet_entities(0, 10_000_000, 10) == []
+
+
 def test_drawing_handle_defers_package_entities(dwf_bytes: bytes) -> None:
     eager = _core.read_drawing_bytes(dwf_bytes, *DEFAULT_LIMITS.as_args())
     handle = _core.read_drawing_handle(dwf_bytes, *DEFAULT_LIMITS.as_args())

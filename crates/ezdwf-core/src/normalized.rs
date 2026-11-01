@@ -4,10 +4,12 @@
 //! applies DWF ePlot or XPS transforms and keeps source indexes so callers can
 //! move between normalized and raw entities without reparsing or guessing.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::dwfx::XpsCanvasGroup;
 use crate::{
     DwfError, DwfPackage, DwfSection, DwfxPackage, W2dEntity, W2dFont, W2dGeometry, W2dRendition,
     W2dSourceSpan, W2dStream, XpsBrush, XpsEntity, XpsGeometry, XpsMatrix, XpsPathGeometry,
@@ -120,6 +122,18 @@ impl Affine2D {
             e: matrix.offset_x,
             f: matrix.offset_y,
         }
+    }
+
+    /// The coefficients as bit patterns, for keying a map by transform.
+    fn bits(self) -> [u64; 6] {
+        [
+            self.a.to_bits(),
+            self.b.to_bits(),
+            self.c.to_bits(),
+            self.d.to_bits(),
+            self.e.to_bits(),
+            self.f.to_bits(),
+        ]
     }
 
     /// Compose transforms so the returned transform applies `local`, then `self`.
@@ -380,8 +394,67 @@ pub struct NormalizedCompositingGroup {
     pub name: Option<String>,
     /// Local Canvas opacity. Ancestor values are represented by ancestor groups.
     pub opacity: f64,
-    pub clip: Option<NormalizedClip>,
+    pub clip: Option<Arc<NormalizedClip>>,
     pub opacity_mask: Option<NormalizedBrush>,
+}
+
+/// Clips and Canvas groups shared by the entities of one page.
+///
+/// A plot set repeats the same few clip chains and Canvas groups on every
+/// path: one DWFx had 171,000 paths with three groups each, and owned copies
+/// of the groups and clips took 1.7 GB.
+#[derive(Default)]
+struct XpsShared {
+    clips: HashMap<(usize, [u64; 6]), Arc<NormalizedClip>>,
+    groups: HashMap<usize, Arc<NormalizedCompositingGroup>>,
+}
+
+impl XpsShared {
+    fn clip(
+        &mut self,
+        geometry: &Arc<XpsPathGeometry>,
+        transform: Affine2D,
+    ) -> Arc<NormalizedClip> {
+        self.clips
+            .entry((Arc::as_ptr(geometry) as usize, transform.bits()))
+            .or_insert_with(|| {
+                Arc::new(NormalizedClip {
+                    fill_rule: geometry.fill_rule.clone(),
+                    figures: normalize_xps_path(geometry, transform),
+                })
+            })
+            .clone()
+    }
+
+    fn group(
+        &mut self,
+        group: &XpsCanvasGroup,
+        page_transform: Affine2D,
+    ) -> Arc<NormalizedCompositingGroup> {
+        self.groups
+            .entry(group.id)
+            .or_insert_with(|| {
+                let group_transform = page_transform.compose(Affine2D::from_xps(group.transform));
+                Arc::new(NormalizedCompositingGroup {
+                    id: group.id,
+                    name: group.name.clone(),
+                    opacity: group.opacity,
+                    clip: group.clip.as_ref().map(|clip| {
+                        let clip_transform =
+                            group_transform.compose(Affine2D::from_xps(clip.transform));
+                        Arc::new(NormalizedClip {
+                            fill_rule: clip.fill_rule.clone(),
+                            figures: normalize_xps_path(clip, clip_transform),
+                        })
+                    }),
+                    opacity_mask: group
+                        .opacity_mask
+                        .as_ref()
+                        .map(|mask| normalize_xps_brush(mask, group_transform)),
+                })
+            })
+            .clone()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -487,15 +560,17 @@ pub struct NormalizedEntity {
     pub is_markup: bool,
     pub geometry: NormalizedGeometry,
     /// Effective ancestor-to-visual clip chain retained for query compatibility.
-    pub clips: Vec<NormalizedClip>,
+    /// Shared with the other entities under the same Canvas clips.
+    pub clips: Vec<Arc<NormalizedClip>>,
     /// The visual's local clip, rendered inside its Canvas compositing groups.
-    pub local_clips: Vec<NormalizedClip>,
+    pub local_clips: Vec<Arc<NormalizedClip>>,
     /// Effective ancestor-to-visual mask chain retained for query compatibility.
     pub opacity_masks: Vec<NormalizedBrush>,
     /// The visual's local opacity mask, rendered inside Canvas groups.
     pub local_opacity_masks: Vec<NormalizedBrush>,
-    /// Ancestor Canvas groups in outer-to-inner order.
-    pub compositing_groups: Vec<NormalizedCompositingGroup>,
+    /// Ancestor Canvas groups in outer-to-inner order, shared with the other
+    /// entities of the same Canvas.
+    pub compositing_groups: Vec<Arc<NormalizedCompositingGroup>>,
     /// Positioned packaged-font outlines for XPS Glyphs, when available.
     pub glyph_outline: Option<Vec<NormalizedPathFigure>>,
     /// Shared between consecutive W2D entities drawn with the same rendition.
@@ -693,6 +768,7 @@ pub fn normalize_dwfx(package: &DwfxPackage) -> NormalizedDrawing {
                 e: 0.0,
                 f: page.height,
             };
+            let mut shared = XpsShared::default();
             let entities = page
                 .entities
                 .iter()
@@ -705,6 +781,7 @@ pub fn normalize_dwfx(package: &DwfxPackage) -> NormalizedDrawing {
                         document_index,
                         entity_index,
                         &page.part_name,
+                        &mut shared,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -1040,6 +1117,7 @@ fn normalize_xps_entity(
     document_index: usize,
     entity_index: usize,
     resource_href: &str,
+    shared: &mut XpsShared,
 ) -> NormalizedEntity {
     let transform = page_transform.compose(Affine2D::from_xps(entity.transform));
     let (geometry, font, glyph_outline) = match &entity.geometry {
@@ -1090,10 +1168,7 @@ fn normalize_xps_entity(
             let clip_transform = page_transform
                 .compose(Affine2D::from_xps(clip.transform))
                 .compose(Affine2D::from_xps(clip.geometry.transform));
-            NormalizedClip {
-                fill_rule: clip.geometry.fill_rule.clone(),
-                figures: normalize_xps_path(&clip.geometry, clip_transform),
-            }
+            shared.clip(&clip.geometry, clip_transform)
         })
         .collect();
     let opacity_masks = entity
@@ -1111,10 +1186,10 @@ fn normalize_xps_entity(
         .as_ref()
         .map(|clip| {
             let clip_transform = transform.compose(Affine2D::from_xps(clip.transform));
-            vec![NormalizedClip {
+            vec![Arc::new(NormalizedClip {
                 fill_rule: clip.fill_rule.clone(),
                 figures: normalize_xps_path(clip, clip_transform),
-            }]
+            })]
         })
         .unwrap_or_default();
     let local_opacity_masks = entity
@@ -1125,26 +1200,7 @@ fn normalize_xps_entity(
     let compositing_groups = entity
         .canvas_groups
         .iter()
-        .map(|group| {
-            let group_transform = page_transform.compose(Affine2D::from_xps(group.transform));
-            NormalizedCompositingGroup {
-                id: group.id,
-                name: group.name.clone(),
-                opacity: group.opacity,
-                clip: group.clip.as_ref().map(|clip| {
-                    let clip_transform =
-                        group_transform.compose(Affine2D::from_xps(clip.transform));
-                    NormalizedClip {
-                        fill_rule: clip.fill_rule.clone(),
-                        figures: normalize_xps_path(clip, clip_transform),
-                    }
-                }),
-                opacity_mask: group
-                    .opacity_mask
-                    .as_ref()
-                    .map(|mask| normalize_xps_brush(mask, group_transform)),
-            }
-        })
+        .map(|group| shared.group(group, page_transform))
         .collect::<Vec<_>>();
     let mut style = normalize_xps_style(&entity.style, &entity.geometry, transform, font);
     style.visible &= compositing_groups.iter().all(|group| group.opacity > 0.0);
@@ -1500,6 +1556,7 @@ fn normalize_xps_brush(brush: &XpsBrush, transform: Affine2D) -> NormalizedBrush
                 e: 0.0,
                 f: 0.0,
             };
+            let mut shared = XpsShared::default();
             let entities = visual
                 .as_ref()
                 .map(|visual| {
@@ -1515,6 +1572,7 @@ fn normalize_xps_brush(brush: &XpsBrush, transform: Affine2D) -> NormalizedBrush
                                 0,
                                 index,
                                 "visual-brush",
+                                &mut shared,
                             )
                         })
                         .collect()

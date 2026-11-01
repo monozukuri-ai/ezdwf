@@ -769,9 +769,10 @@ def read(
 ) -> Drawing:
     """Parse DWF 6, DWFx, or a legacy 2D stream into raw and normalized views.
 
-    ``keep_raw=False`` leaves out the raw W2D records of a DWF 6 package, a
-    second copy of every entity: ``entity.raw`` is ``None`` and the streams in
-    ``drawing.raw`` have no entities.
+    ``keep_raw=False`` leaves out the raw records, a second copy of every
+    entity: ``entity.raw`` is ``None``, the W2D streams in ``drawing.raw`` of a
+    DWF 6 package have no entities, and the XPS pages of a DWFx package have no
+    entities either (a legacy stream is always kept).
     """
 
     data = _load_data(source, max_file_size=limits.max_file_size)
@@ -782,7 +783,7 @@ def read(
     # memory tracks the largest single piece instead of the whole drawing —
     # a 630 KB / 9-sheet real plot set drops from ~1.27 GB peak RSS to a few
     # hundred MB with byte-identical results.
-    handle = _core.read_drawing_handle(data, *limits.as_args())
+    handle = _core.read_drawing_handle(data, *limits.as_args(), keep_raw=keep_raw)
     source_name = os.fspath(source) if isinstance(source, (str, os.PathLike)) else None
     return _drawing_from_handle(handle, source_name=source_name, keep_raw=keep_raw)
 
@@ -902,7 +903,10 @@ def _sheet_from_mapping(
     )
 
 
-_HANDLE_CHUNK = 4096
+# Entities per range fetch. The dicts of one chunk are the only transient copy;
+# a plot set's paths with their clip chains ran to 50 KB each, so 4,096 of them
+# took 200 MB at once.
+_HANDLE_CHUNK = 1024
 
 
 def _chunked_rows(fetch: Callable[[int, int], list[Mapping[str, Any]]]):
@@ -920,14 +924,14 @@ def _chunked_rows(fetch: Callable[[int, int], list[Mapping[str, Any]]]):
     return rows()
 
 
-def _drawing_from_handle(
-    handle: Any,
-    *,
-    source_name: str | None,
-    keep_raw: bool = True,
-) -> Drawing:
-    """Build a :class:`Drawing` from a ``_core.DrawingHandle``, converting one
-    piece at a time so no monolithic dict tree ever exists (see ``read``)."""
+def _raw_views_from_handle(
+    handle: Any, *, keep_raw: bool
+) -> tuple[PackageInfo | None, W2dStream | None, DwfxPackageInfo | None]:
+    """The raw package / stream / DWFx views of a ``_core.DrawingHandle``.
+
+    Without ``keep_raw`` the package views carry no entities: the raw model is a
+    second copy of every entity (4.7 million points as dicts for one 4 MB DWFx
+    plot set). A legacy stream is always materialized."""
 
     package: PackageInfo | None = None
     legacy_stream: W2dStream | None = None
@@ -954,8 +958,26 @@ def _drawing_from_handle(
         legacy_stream = _w2d_stream(cast(Mapping[str, Any], handle.legacy_stream()))
     else:
         dwfx_package = _dwfx_from_mapping(
-            cast(Mapping[str, Any], handle.dwfx_package())
+            cast(
+                Mapping[str, Any],
+                handle.dwfx_package() if keep_raw else handle.dwfx_package_shell(),
+            )
         )
+    return package, legacy_stream, dwfx_package
+
+
+def _drawing_from_handle(
+    handle: Any,
+    *,
+    source_name: str | None,
+    keep_raw: bool = True,
+) -> Drawing:
+    """Build a :class:`Drawing` from a ``_core.DrawingHandle``, converting one
+    piece at a time so no monolithic dict tree ever exists (see ``read``)."""
+
+    package, legacy_stream, dwfx_package = _raw_views_from_handle(
+        handle, keep_raw=keep_raw
+    )
     sheets = []
     for index in range(handle.sheet_count()):
         # シート本体はエンティティ抜きのshellで受け取り、エンティティは
@@ -976,7 +998,7 @@ def _drawing_from_handle(
                 package,
                 legacy_stream,
                 dwfx_package,
-                link_raw=keep_raw or package is None,
+                link_raw=keep_raw or legacy_stream is not None,
             )
         )
         del sheet_value
@@ -987,6 +1009,161 @@ def _drawing_from_handle(
         sheets=tuple(sheets),
         source_name=source_name,
     )
+
+
+class DrawingReader:
+    """A drawing whose sheets are read one chunk of entities at a time.
+
+    ``sheets`` are the same :class:`Sheet` records :func:`read` returns, but
+    without entities: their names, paper, bounds and units are there, and
+    :meth:`entities` / :meth:`markup_entities` yield one sheet's entities in
+    order, materializing 1,024 at a time while the drawing stays in the Rust
+    core. A plot set of millions of points then keeps one chunk of Python
+    objects in memory instead of all of them (a 4 MB DWFx with 4.7 million
+    points took 2.5 GB as objects). Raw records are never kept; see
+    :func:`open_drawing`.
+
+    With ``consume=True`` each chunk is also released from the Rust core once
+    it has been yielded, and the freed memory is returned to the operating
+    system as the reader goes, so the drawing's footprint shrinks while the
+    caller's objects grow. A sheet can then be iterated once: a second
+    :meth:`entities` call for the same sheet yields nothing.
+    """
+
+    __slots__ = (
+        "_consume",
+        "_drawing",
+        "_dwfx_package",
+        "_handle",
+        "_legacy_stream",
+        "_package",
+    )
+
+    def __init__(
+        self, handle: Any, *, source_name: str | None, consume: bool = False
+    ) -> None:
+        self._handle = handle
+        self._consume = consume
+        package, legacy_stream, dwfx_package = _raw_views_from_handle(
+            handle, keep_raw=False
+        )
+        self._package = package
+        self._legacy_stream = legacy_stream
+        self._dwfx_package = dwfx_package
+        sheets = []
+        for index in range(handle.sheet_count()):
+            sheet_value = dict(cast(Mapping[str, Any], handle.sheet_shell(index)))
+            sheet_value["entities"] = ()
+            sheet_value["markup_entities"] = ()
+            sheets.append(
+                _sheet_from_mapping(
+                    sheet_value,
+                    package,
+                    legacy_stream,
+                    dwfx_package,
+                    link_raw=legacy_stream is not None,
+                )
+            )
+        self._drawing = Drawing(
+            package=package,
+            legacy_stream=legacy_stream,
+            dwfx_package=dwfx_package,
+            sheets=tuple(sheets),
+            source_name=source_name,
+        )
+
+    @property
+    def sheets(self) -> tuple[Sheet, ...]:
+        """Every sheet without its entities (``sheet.entities`` is empty)."""
+        return self._drawing.sheets
+
+    @property
+    def diagnostics(self):
+        return self._drawing.diagnostics
+
+    @property
+    def source_name(self) -> str | None:
+        return self._drawing.source_name
+
+    @property
+    def is_legacy(self) -> bool:
+        return self._drawing.is_legacy
+
+    @property
+    def is_dwfx(self) -> bool:
+        return self._drawing.is_dwfx
+
+    @property
+    def raw(self) -> PackageInfo | W2dStream | DwfxPackageInfo:
+        """The package or stream without entities (a legacy stream is complete)."""
+        return self._drawing.raw
+
+    def __len__(self) -> int:
+        return len(self._drawing.sheets)
+
+    def entity_count(self, index: int) -> int:
+        return int(self._handle.sheet_entity_count(index))
+
+    def markup_entity_count(self, index: int) -> int:
+        return int(self._handle.sheet_markup_entity_count(index))
+
+    def entities(self, index: int) -> Iterator[Entity]:
+        """The entities of ``sheets[index]`` in drawing order, one chunk at a time."""
+        fetch = (
+            self._handle.take_sheet_entities
+            if self._consume
+            else self._handle.sheet_entities
+        )
+        return self._iter_entities(lambda start, count: fetch(index, start, count))
+
+    def markup_entities(self, index: int) -> Iterator[Entity]:
+        """The markup entities of ``sheets[index]``, one chunk at a time."""
+        fetch = (
+            self._handle.take_sheet_markup_entities
+            if self._consume
+            else self._handle.sheet_markup_entities
+        )
+        return self._iter_entities(lambda start, count: fetch(index, start, count))
+
+    def _iter_entities(
+        self, fetch: Callable[[int, int], list[Mapping[str, Any]]]
+    ) -> Iterator[Entity]:
+        # One style cache per list, as `_sheet_from_mapping` keeps.
+        style_cache: dict[int, Style] = {}
+        for row in _chunked_rows(fetch):
+            yield _entity_from_mapping(
+                row,
+                self._package,
+                self._legacy_stream,
+                self._dwfx_package,
+                embedded=self._legacy_stream is None,
+                style_cache=style_cache,
+            )
+
+
+def open_drawing(
+    source: DwfSource,
+    *,
+    limits: ParseLimits = DEFAULT_LIMITS,
+    consume: bool = False,
+) -> DrawingReader:
+    """Parse DWF 6, DWFx or a legacy 2D stream for reading sheet by sheet.
+
+    The result is a :class:`DrawingReader`: the drawing is decoded and
+    normalized in the Rust core, and only the sheets' entities you iterate are
+    turned into Python objects, a chunk at a time. Use it for large plot sets;
+    :func:`read` returns the whole :class:`Drawing` at once.
+
+    ``consume=True`` releases each chunk from the Rust core as soon as it has
+    been yielded (and returns the freed memory to the operating system), for
+    a conversion that reads every sheet once. The reader's memory then shrinks
+    while the converted objects grow, instead of both copies peaking together.
+    """
+
+    data = _load_data(source, max_file_size=limits.max_file_size)
+    handle = _core.read_drawing_handle(data, *limits.as_args(), keep_raw=False)
+    source_name = os.fspath(source) if isinstance(source, (str, os.PathLike)) else None
+    return DrawingReader(handle, source_name=source_name, consume=consume)
 
 
 def _path_segment_from_mapping(value: Mapping[str, Any]) -> PathSegment:

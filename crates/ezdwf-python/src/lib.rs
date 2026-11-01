@@ -211,7 +211,7 @@ fn inspect_dwfx_bytes(
         inspect_dwfx_without_glyph_outlines(data, options)
     }
     .map_err(core_error_to_python)?;
-    Ok(dwfx_to_python(py, &package)?.into_any().unbind())
+    Ok(dwfx_to_python(py, &package, true)?.into_any().unbind())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -284,7 +284,7 @@ fn read_drawing_bytes(
             let drawing = normalize_dwfx(&package);
             output.set_item("package", py.None())?;
             output.set_item("legacy_stream", py.None())?;
-            output.set_item("dwfx_package", dwfx_to_python(py, &package)?)?;
+            output.set_item("dwfx_package", dwfx_to_python(py, &package, true)?)?;
             output.set_item("drawing", normalized_drawing_to_python(py, &drawing)?)?;
         }
     }
@@ -318,13 +318,123 @@ fn single_stream_identity(format: &DwfFormat) -> (&'static str, &'static str, &'
 /// normalized sheet at a time. The Python wrapper frees each piece's dict as
 /// soon as it has folded it into its dataclasses, so peak memory tracks the
 /// LARGEST piece rather than the sum of all of them.
-#[pyclass(module = "ezdwf._core", frozen)]
+#[pyclass(module = "ezdwf._core")]
 struct DrawingHandle {
     package: Option<DwfPackage>,
     legacy_stream: Option<W2dStream>,
     dwfx_package: Option<DwfxPackage>,
     drawing: NormalizedDrawing,
+    /// Per sheet, how many leading `entities` / `markup_entities` a
+    /// `take_sheet_*` call has released.
+    consumed: Vec<[usize; 2]>,
+    /// Entities released since freed heap was last returned to the OS.
+    consumed_since_trim: usize,
 }
+
+/// `take_sheet_*` returns freed heap to the OS after this many entities. glibc
+/// keeps freed small chunks mapped otherwise, and Python's allocator cannot
+/// reuse them: one plot set kept 800 MB of released geometry in RSS.
+const TRIM_EVERY_ENTITIES: usize = 16_384;
+
+impl DrawingHandle {
+    fn new(
+        package: Option<DwfPackage>,
+        legacy_stream: Option<W2dStream>,
+        dwfx_package: Option<DwfxPackage>,
+        drawing: NormalizedDrawing,
+    ) -> Self {
+        let consumed = vec![[0, 0]; drawing.sheets.len()];
+        Self {
+            package,
+            legacy_stream,
+            dwfx_package,
+            drawing,
+            consumed,
+            consumed_since_trim: 0,
+        }
+    }
+
+    fn sheet_at(&self, index: usize) -> PyResult<&NormalizedSheet> {
+        self.drawing.sheets.get(index).ok_or_else(|| {
+            pyo3::exceptions::PyIndexError::new_err(format!(
+                "sheet index {index} out of range (0..{})",
+                self.drawing.sheets.len()
+            ))
+        })
+    }
+
+    fn take_entities(
+        &mut self,
+        py: Python<'_>,
+        index: usize,
+        start: usize,
+        count: usize,
+        markup: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let sheet_count = self.drawing.sheets.len();
+        let sheet = self.drawing.sheets.get_mut(index).ok_or_else(|| {
+            pyo3::exceptions::PyIndexError::new_err(format!(
+                "sheet index {index} out of range (0..{sheet_count})"
+            ))
+        })?;
+        let entities = if markup {
+            &mut sheet.markup_entities
+        } else {
+            &mut sheet.entities
+        };
+        let consumed = &mut self.consumed[index][usize::from(markup)];
+        if start < *consumed {
+            return Ok(PyList::empty(py).into_any().unbind());
+        }
+        let rows = entity_slice_to_python(py, entities, start, count)?;
+        let end = start.saturating_add(count).min(entities.len());
+        for entity in &mut entities[start.min(end)..end] {
+            release_entity(entity);
+        }
+        let taken = end.saturating_sub(start);
+        *consumed = end.max(*consumed);
+        self.consumed_since_trim += taken;
+        if taken == 0 || self.consumed_since_trim >= TRIM_EVERY_ENTITIES {
+            if self.consumed_since_trim > 0 {
+                release_freed_heap();
+            }
+            self.consumed_since_trim = 0;
+        }
+        Ok(rows)
+    }
+}
+
+/// Drop what a released entity owned on the heap: geometry, clips, masks,
+/// Canvas groups and glyph outlines. The shared style and resource names stay,
+/// so the entity still reads as an empty polyline.
+fn release_entity(entity: &mut NormalizedEntity) {
+    entity.geometry = ezdwf_core::NormalizedGeometry::Polyline { points: Vec::new() };
+    entity.clips = Vec::new();
+    entity.local_clips = Vec::new();
+    entity.opacity_masks = Vec::new();
+    entity.local_opacity_masks = Vec::new();
+    entity.compositing_groups = Vec::new();
+    entity.glyph_outline = None;
+}
+
+/// Return freed heap pages to the OS. glibc leaves freed small chunks mapped,
+/// and CPython's own allocator (mmap'd arenas) cannot reuse them, so a process
+/// that parsed a plot set showed 1.3 GB of RSS for 0.5 GB of normalized data.
+/// A no-op on other allocators.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn release_freed_heap() {
+    extern "C" {
+        fn malloc_trim(pad: usize) -> std::os::raw::c_int;
+    }
+    // SAFETY: glibc's malloc_trim only consults the allocator's own
+    // bookkeeping; it takes no pointer from us and is safe to call any time.
+    unsafe {
+        malloc_trim(0);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn release_freed_heap() {}
 
 #[pymethods]
 impl DrawingHandle {
@@ -341,6 +451,15 @@ impl DrawingHandle {
 
     fn sheet_count(&self) -> usize {
         self.drawing.sheets.len()
+    }
+
+    fn sheet_entity_count(&self, index: usize) -> PyResult<usize> {
+        self.sheet_at(index).map(|sheet| sheet.entities.len())
+    }
+
+    fn sheet_markup_entity_count(&self, index: usize) -> PyResult<usize> {
+        self.sheet_at(index)
+            .map(|sheet| sheet.markup_entities.len())
     }
 
     /// One normalized sheet as the same dict `read_drawing_bytes` produced
@@ -403,6 +522,34 @@ impl DrawingHandle {
             ))
         })?;
         entity_slice_to_python(py, &sheet.markup_entities, start, count)
+    }
+
+    /// `sheet_entities`, after which the returned entities are released from
+    /// the Rust core (geometry, clips, masks, Canvas groups, glyph outlines)
+    /// and freed heap is returned to the OS now and then, so a one-pass
+    /// reader's drawing shrinks while its own objects grow. A range that
+    /// starts inside the taken prefix of a sheet comes back empty: a sheet is
+    /// taken once. `sheet_entities` still lists released entities, as empty
+    /// polylines.
+    fn take_sheet_entities(
+        &mut self,
+        py: Python<'_>,
+        index: usize,
+        start: usize,
+        count: usize,
+    ) -> PyResult<Py<PyAny>> {
+        self.take_entities(py, index, start, count, false)
+    }
+
+    /// `take_sheet_entities` for the markup entities.
+    fn take_sheet_markup_entities(
+        &mut self,
+        py: Python<'_>,
+        index: usize,
+        start: usize,
+        count: usize,
+    ) -> PyResult<Py<PyAny>> {
+        self.take_entities(py, index, start, count, true)
     }
 
     /// The package dict WITHOUT per-stream entity display lists (each
@@ -474,12 +621,29 @@ impl DrawingHandle {
             .dwfx_package
             .as_ref()
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("not a DWFx package"))?;
-        Ok(dwfx_to_python(py, package)?.into_any().unbind())
+        Ok(dwfx_to_python(py, package, true)?.into_any().unbind())
+    }
+
+    /// The DWFx package dict without the pages' raw XPS entities (for
+    /// `keep_raw=False`; the normalized sheets still carry every entity).
+    fn dwfx_package_shell(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let package = self
+            .dwfx_package
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("not a DWFx package"))?;
+        Ok(dwfx_to_python(py, package, false)?.into_any().unbind())
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
+#[pyo3(signature = (
+    data, max_file_size, max_archive_entries, max_entry_size, max_total_uncompressed_size,
+    max_compression_ratio, max_xml_size, max_xml_depth, max_w2d_records,
+    max_w2d_points_per_entity, max_w2d_total_points, max_w2d_entities, max_w2d_string_size,
+    max_w2d_nesting_depth, max_w2d_decompressed_size, max_w2d_compression_depth,
+    max_xps_visuals, max_xps_path_segments, keep_raw = true
+))]
 fn read_drawing_handle(
     data: &[u8],
     max_file_size: usize,
@@ -499,6 +663,7 @@ fn read_drawing_handle(
     max_w2d_compression_depth: usize,
     max_xps_visuals: usize,
     max_xps_path_segments: usize,
+    keep_raw: bool,
 ) -> PyResult<DrawingHandle> {
     let options = parse_options(
         max_file_size,
@@ -520,16 +685,20 @@ fn read_drawing_handle(
         max_xps_path_segments,
     );
     let format = detect_format(data, options).map_err(core_error_to_python)?;
-    match format {
+    let handle = match format {
         DwfFormat::DwfPackage { .. } => {
-            let package = inspect_package(data, options).map_err(core_error_to_python)?;
+            let mut package = inspect_package(data, options).map_err(core_error_to_python)?;
             let drawing = normalize_package(&package).map_err(core_error_to_python)?;
-            Ok(DrawingHandle {
-                package: Some(package),
-                legacy_stream: None,
-                dwfx_package: None,
-                drawing,
-            })
+            if !keep_raw {
+                // The raw W2D records are a second copy of every entity; readers
+                // without `keep_raw` never ask for them, so free them here.
+                for section in &mut package.manifest.sections {
+                    for stream in &mut section.w2d_streams {
+                        stream.entities = Vec::new();
+                    }
+                }
+            }
+            DrawingHandle::new(Some(package), None, None, drawing)
         }
         DwfFormat::LegacyDwf { .. } | DwfFormat::W2dStream { .. } => {
             let (resource, role, mime) = single_stream_identity(&format);
@@ -538,24 +707,26 @@ fn read_drawing_handle(
             stream.role = role.to_owned();
             stream.mime = mime.to_owned();
             let drawing = normalize_stream(&stream);
-            Ok(DrawingHandle {
-                package: None,
-                legacy_stream: Some(stream),
-                dwfx_package: None,
-                drawing,
-            })
+            DrawingHandle::new(None, Some(stream), None, drawing)
         }
         DwfFormat::Dwfx => {
-            let package = inspect_dwfx(data, options).map_err(core_error_to_python)?;
+            let mut package = inspect_dwfx(data, options).map_err(core_error_to_python)?;
             let drawing = normalize_dwfx(&package);
-            Ok(DrawingHandle {
-                package: None,
-                legacy_stream: None,
-                dwfx_package: Some(package),
-                drawing,
-            })
+            if !keep_raw {
+                for document in &mut package.documents {
+                    for page in &mut document.pages {
+                        page.entities = Vec::new();
+                    }
+                }
+            }
+            DrawingHandle::new(None, None, Some(package), drawing)
         }
-    }
+    };
+    // Parsing and the dropped raw model leave freed chunks in the heap that
+    // glibc keeps mapped: a 4 MB plot set showed 1.3 GB of RSS for 0.5 GB of
+    // normalized data.
+    release_freed_heap();
+    Ok(handle)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1442,7 +1613,14 @@ fn package_to_python_impl<'py>(
     Ok(output)
 }
 
-fn dwfx_to_python<'py>(py: Python<'py>, package: &DwfxPackage) -> PyResult<Bound<'py, PyDict>> {
+/// `include_entities: false` leaves every page's `entities` empty: the raw XPS
+/// model is a second copy of a drawing (4.7 million points as dicts for one
+/// 4 MB plot set), and `keep_raw=False` readers only want the pages.
+fn dwfx_to_python<'py>(
+    py: Python<'py>,
+    package: &DwfxPackage,
+    include_entities: bool,
+) -> PyResult<Bound<'py, PyDict>> {
     let output = PyDict::new(py);
     output.set_item("format", format_row(&package.format))?;
     let entries = PyList::empty(py);
@@ -1502,8 +1680,10 @@ fn dwfx_to_python<'py>(py: Python<'py>, package: &DwfxPackage) -> PyResult<Bound
                 xps_canvas_groups_to_python(py, &page.entities)?,
             )?;
             let entities = PyList::empty(py);
-            for entity in &page.entities {
-                entities.append(xps_entity_to_python(py, entity)?)?;
+            if include_entities {
+                for entity in &page.entities {
+                    entities.append(xps_entity_to_python(py, entity)?)?;
+                }
             }
             page_row.set_item("entities", entities)?;
             let diagnostics = PyList::empty(py);
