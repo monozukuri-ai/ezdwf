@@ -13,6 +13,17 @@ const W2D_HEADER_PREFIX: &str = "V";
 /// First W2D revision (decimal hundredths) whose binary text opcode carries the
 /// trailing reserved option vector after the bounds.
 const TEXT_RESERVED_OPTION_REVISION: u16 = 55;
+/// First revision whose binary Set Font starts with a field mask. Earlier
+/// streams (WHIP! 2.0 era, 00.30 and before) store a counted name followed by
+/// fixed style, charset and pitch/family fields.
+const FONT_FIELD_MASK_REVISION: u16 = 31;
+/// First revision whose Draw Text opcodes no longer carry font attributes
+/// inline: before it, 0x18 stores rotation and height and 'x' stores the whole
+/// font geometry ahead of the string.
+const TEXT_ATTRIBUTES_REMOVED_REVISION: u16 = 32;
+/// First revision whose binary Set Color operand is RGBA; earlier streams
+/// store BGRA.
+const COLOR_RGBA_REVISION: u16 = 33;
 
 /// Decode a standalone W2D display-list resource.
 ///
@@ -1769,12 +1780,16 @@ impl<'a> Decoder<'a> {
             b'F' => self.rendition.fill = true,
             b'f' => self.rendition.fill = false,
             0x03 => {
-                self.rendition.color = Some([
+                let mut color = [
                     self.read_u8()?,
                     self.read_u8()?,
                     self.read_u8()?,
                     self.read_u8()?,
-                ]);
+                ];
+                if self.revision() < COLOR_RGBA_REVISION {
+                    color.swap(0, 2);
+                }
+                self.rendition.color = Some(color);
                 self.rendition.color_index = None;
             }
             b'C' => {
@@ -2052,6 +2067,9 @@ impl<'a> Decoder<'a> {
                     "E",
                 )?;
             }
+            b'x' if self.revision() < TEXT_ATTRIBUTES_REMOVED_REVISION => {
+                self.decode_obsolete_ascii_text(start)?;
+            }
             b'x' => {
                 let position = self.read_relative_point_i32()?;
                 let text = self.read_w2d_string(start)?;
@@ -2065,6 +2083,9 @@ impl<'a> Decoder<'a> {
                     self.position - start,
                     "x",
                 )?;
+            }
+            0x18 if self.revision() < TEXT_ATTRIBUTES_REMOVED_REVISION => {
+                self.decode_obsolete_binary_text(start)?;
             }
             0x18 => self.decode_advanced_binary_text(start)?,
             0x07 | b'g' => self.decode_binary_gouraud(opcode, start, true)?,
@@ -2099,7 +2120,129 @@ impl<'a> Decoder<'a> {
         Ok(())
     }
 
+    /// Set Font before W2D 00.31: a counted ASCII name, one style byte (bold
+    /// 0x01, italic 0x02), then 32-bit charset and pitch/family words. There
+    /// is no field mask; height and the other metrics come with each text.
+    fn decode_legacy_binary_font(&mut self, start: usize) -> Result<(), DwfError> {
+        let length = self.read_count(start)?;
+        self.check_string_size(length, start)?;
+        let name = self.read_ascii_bytes(length, start)?;
+        self.rendition.font.name = Some(String::from_utf8_lossy(&name).into_owned());
+        let style = self.read_u8()?;
+        self.rendition.font.bold = Some(style & 0x01 != 0);
+        self.rendition.font.italic = Some(style & 0x02 != 0);
+        let charset = self.read_i32()?;
+        self.rendition.font.charset = u8::try_from(charset).ok();
+        let pitch_and_family = self.read_i32()?;
+        self.rendition.font.pitch = Some((pitch_and_family & 0x0F) as u8);
+        self.rendition.font.family = Some((pitch_and_family & 0xF0) as u8);
+        Ok(())
+    }
+
+    /// Draw Text (0x18) before W2D 00.32: a 16-bit rotation and a 32-bit
+    /// height that replace the current font's, a relative 32-bit position and
+    /// a counted UTF-16 string.
+    fn decode_obsolete_binary_text(&mut self, start: usize) -> Result<(), DwfError> {
+        let rotation = self.read_u16()?;
+        let height = self.read_i32()?;
+        self.rendition.font.rotation = Some(rotation);
+        self.rendition.font.height = Some(height);
+        let position = self.read_relative_point_i32()?;
+        let text = self.read_obsolete_utf16_string(start)?;
+        self.emit(
+            W2dGeometry::Text {
+                position,
+                text,
+                bounds: None,
+            },
+            start,
+            self.position - start,
+            "0x18",
+        )
+    }
+
+    /// Draw Text ('x') before W2D 00.32: the font's width scale, spacing,
+    /// flags and oblique angle, the overscore and underscore position vectors,
+    /// rotation and height, a relative 32-bit position, four bounding-box
+    /// deltas and a counted UTF-16 string.
+    fn decode_obsolete_ascii_text(&mut self, start: usize) -> Result<(), DwfError> {
+        let width_scale = self.read_u16()?;
+        let spacing = self.read_u16()?;
+        let flags = self.read_u32()?;
+        let oblique = self.read_u16()?;
+        self.skip_count_vector(start)?;
+        self.skip_count_vector(start)?;
+        let rotation = self.read_u16()?;
+        let height = self.read_i32()?;
+        self.rendition.font.width_scale = Some(width_scale);
+        self.rendition.font.spacing = Some(spacing);
+        self.rendition.font.flags = Some(flags);
+        self.rendition.font.oblique = Some(oblique);
+        self.rendition.font.rotation = Some(rotation);
+        self.rendition.font.height = Some(height);
+        let position = self.read_relative_point_i32()?;
+        let mut delta = [0_i64; 8];
+        for value in &mut delta {
+            *value = i64::from(self.read_i32()?);
+        }
+        // The deltas chain the corners: the first corner hangs off the position,
+        // the second and third off the previous corner, the fourth off the first.
+        let first = W2dPoint {
+            x: position.x + delta[4],
+            y: position.y + delta[6],
+        };
+        let second = W2dPoint {
+            x: first.x + delta[7],
+            y: first.y + delta[5],
+        };
+        let third = W2dPoint {
+            x: second.x + delta[2],
+            y: second.y + delta[3],
+        };
+        let fourth = W2dPoint {
+            x: first.x + delta[0],
+            y: first.y + delta[1],
+        };
+        let text = self.read_obsolete_utf16_string(start)?;
+        self.emit(
+            W2dGeometry::Text {
+                position,
+                text,
+                bounds: Some([first, second, third, fourth]),
+            },
+            start,
+            self.position - start,
+            "x",
+        )
+    }
+
+    /// A counted string of 16-bit code units, as the pre-00.32 text opcodes
+    /// store it.
+    fn read_obsolete_utf16_string(&mut self, start: usize) -> Result<String, DwfError> {
+        let count = self.read_count(start)?;
+        self.check_string_size(count, start)?;
+        let mut units = Vec::with_capacity(count);
+        for _ in 0..count {
+            units.push(self.read_u16()?);
+        }
+        Ok(String::from_utf16_lossy(&units))
+    }
+
+    fn read_ascii_bytes(&mut self, length: usize, start: usize) -> Result<Vec<u8>, DwfError> {
+        let end = self
+            .position
+            .checked_add(length)
+            .filter(|end| *end <= self.data.len())
+            .ok_or_else(|| self.error_at(start, "truncated counted string"))?;
+        let bytes = self.data[self.position..end].to_vec();
+        self.position = end;
+        Ok(bytes)
+    }
+
     fn decode_binary_font(&mut self, start: usize) -> Result<(), DwfError> {
+        if self.revision() < FONT_FIELD_MASK_REVISION {
+            return self.decode_legacy_binary_font(start);
+        }
         let fields = self.read_u16()?;
         if fields & 0x0001 != 0 {
             self.rendition.font.name = Some(self.read_w2d_string(start)?);
@@ -3440,6 +3583,87 @@ mod tests {
             decode_w2d(unknown, "<legacy.dwf>", ParseOptions::default()),
             Err(DwfError::UnsupportedW2dVersion { .. })
         ));
+    }
+
+    #[test]
+    fn decodes_whip_2_era_font_text_and_bgra_color() {
+        // (DWF V00.30): 1999 年頃の AutoCAD R14 の出力。Set Font は欄のマスクを持たず
+        // 「長さ+名前+太字斜体+文字集合(i32)+ピッチ/族(i32)」、0x18 の文字は
+        // 「回転(i16)+高さ(i32)+相対位置+UTF-16 の文字列」、'x' の文字は幅倍率・字間・
+        // フラグ・傾き・上下線の位置列・回転・高さ・位置・外接枠の差分 4 点+文字列、
+        // 色(0x03)は BGRA
+        let mut data = b"(DWF V00.30)".to_vec();
+        data.extend_from_slice(&[0x03, 0x10, 0x20, 0x30, 0xFF]);
+        data.push(0x06);
+        data.push(11);
+        data.extend_from_slice(b"Courier New");
+        data.push(0x01); // bold
+        data.extend_from_slice(&0_i32.to_le_bytes());
+        data.extend_from_slice(&0x31_i32.to_le_bytes());
+        data.push(0x18);
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        data.extend_from_slice(&9135_i32.to_le_bytes());
+        data.extend_from_slice(&100_i32.to_le_bytes());
+        data.extend_from_slice(&200_i32.to_le_bytes());
+        data.push(2);
+        data.extend_from_slice(&[b'A', 0, b'B', 0]);
+        data.push(b'x');
+        data.extend_from_slice(&1024_u16.to_le_bytes());
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        data.extend_from_slice(&0_u32.to_le_bytes());
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        // empty overscore and underscore vectors (the count is stored plus one)
+        data.push(1);
+        data.push(1);
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        data.extend_from_slice(&500_i32.to_le_bytes());
+        data.extend_from_slice(&10_i32.to_le_bytes());
+        data.extend_from_slice(&(-20_i32).to_le_bytes());
+        for value in [0_i32, 7, 3, 0, 1, 2, 5, 4] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.push(1);
+        data.extend_from_slice(&[0x42, 0x30]); // U+3042
+        data.extend_from_slice(b"(EndOfDWF)");
+
+        let stream = decode_w2d(&data, "<legacy.dwf>", ParseOptions::default()).unwrap();
+        assert_eq!(stream.version, "00.30");
+        assert_eq!(
+            stream.entities.len(),
+            2,
+            "{:?} {:?}",
+            stream.diagnostics,
+            stream.entities
+        );
+        let first = &stream.entities[0];
+        assert_eq!(first.rendition.color, Some([0x30, 0x20, 0x10, 0xFF]));
+        assert_eq!(first.rendition.font.name.as_deref(), Some("Courier New"));
+        assert_eq!(first.rendition.font.bold, Some(true));
+        assert_eq!(first.rendition.font.pitch, Some(1));
+        assert_eq!(first.rendition.font.family, Some(0x30));
+        assert_eq!(first.rendition.font.height, Some(9135));
+        assert!(matches!(
+            &first.geometry,
+            W2dGeometry::Text { position, text, bounds: None }
+                if *position == W2dPoint { x: 100, y: 200 } && text == "AB"
+        ));
+        let second = &stream.entities[1];
+        assert_eq!(second.rendition.font.height, Some(500));
+        assert_eq!(second.rendition.font.width_scale, Some(1024));
+        let W2dGeometry::Text {
+            position,
+            text,
+            bounds: Some(bounds),
+        } = &second.geometry
+        else {
+            panic!("expected text with bounds");
+        };
+        assert_eq!(*position, W2dPoint { x: 110, y: 180 });
+        assert_eq!(text, "\u{3042}");
+        assert_eq!(bounds[0], W2dPoint { x: 111, y: 185 });
+        assert_eq!(bounds[1], W2dPoint { x: 115, y: 187 });
+        assert_eq!(bounds[2], W2dPoint { x: 118, y: 187 });
+        assert_eq!(bounds[3], W2dPoint { x: 111, y: 192 });
     }
 
     #[test]
